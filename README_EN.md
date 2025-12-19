@@ -4,6 +4,13 @@
 - [中文 (Chinese)](README.md)
 - [English](README_EN.md)
 
+## 📱 System Requirements
+> ⚠️ **Important**:
+> **This project requires Android 11 (API 30) or higher.**
+> 
+> While the app may install on Android 8.0+, the core **screen recognition** feature relies on the native Accessibility Screenshot API introduced in Android 11.
+> On devices running Android 10 or lower, the AI will not be able to "see" the screen.
+
 ---
 
 This is a **Standalone Android Version** of AutoGLM! 🚀
