@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
@@ -34,7 +35,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.res.stringResource
 import com.sidhu.androidautoglm.R
 import com.sidhu.androidautoglm.utils.SpeechRecognizerManager
-import com.sidhu.androidautoglm.utils.VoskModelManager
+import com.sidhu.androidautoglm.utils.SherpaModelManager
 
 import android.content.Context
 import android.content.ContextWrapper
@@ -48,6 +49,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.core.*
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.foundation.Image
 import androidx.compose.ui.res.painterResource
@@ -98,9 +102,13 @@ fun RecordingIndicator(soundLevel: Float) {
     )
 
     // Sound level based scaling (more responsive)
-    // rmsdB usually ranges from -2 to 10+. We map it to a scale factor.
-    // Ensure negative values don't shrink it too much.
-    val volumeScale = (1f + (maxOf(0f, soundLevel) / 5f)).coerceIn(1f, 2.5f)
+    // Map -60dB (silence) to -10dB (loud speech) to 0.0 - 1.0
+    // Using a wider range to capture softer voices too
+    val normalizedLevel = ((soundLevel + 60f) / 50f).coerceIn(0f, 1f)
+    
+    // Apply non-linear curve to make small changes more visible
+    // Map 0..1 to 1.0..2.0 range
+    val volumeScale = 1f + (normalizedLevel * normalizedLevel * 1.0f)
     
     val animatedVolumeScale by animateFloatAsState(
         targetValue = volumeScale,
@@ -272,6 +280,7 @@ fun ChatScreen(
     
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val listState = rememberLazyListState()
 
     // Speech Recognition
     val speechRecognizerManager = remember { SpeechRecognizerManager(context) }
@@ -279,18 +288,15 @@ fun ChatScreen(
     val soundLevel by speechRecognizerManager.soundLevel.collectAsState()
     var isVoiceMode by remember { mutableStateOf(false) } // Toggle between Text and Voice mode
 
-    // Vosk Model Initialization
-    val modelState by VoskModelManager.modelState.collectAsState()
-    val loadedLanguage by VoskModelManager.loadedLanguage.collectAsState()
-    val appLanguage = context.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
-        .getString("language_code", "zh") ?: "zh"
+    // Sherpa Model Initialization
+    val modelState by SherpaModelManager.modelState.collectAsState()
+    
+    // Check if model is ready
+    val isModelReady = modelState is SherpaModelManager.ModelState.Ready
 
-    // Check if model matches app language
-    val isModelReady = modelState is VoskModelManager.ModelState.Ready && loadedLanguage == appLanguage
-
-    // Auto-init if model is not ready
-    LaunchedEffect(appLanguage) {
-        VoskModelManager.initModel(context, appLanguage)
+    // Auto-init model
+    LaunchedEffect(Unit) {
+        SherpaModelManager.initModel(context)
     }
 
     val scope = rememberCoroutineScope()
@@ -349,7 +355,16 @@ fun ChatScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.clickable {
+                        scope.launch {
+                            if (listState.firstVisibleItemIndex > 0) {
+                                listState.animateScrollToItem(0)
+                            }
+                        }
+                    }
+                ) {
                     Image(
                         painter = painterResource(id = R.mipmap.ic_launcher),
                         contentDescription = null,
@@ -364,8 +379,42 @@ fun ChatScreen(
                         color = Color.Black
                     )
                 }
-                IconButton(onClick = onOpenSettings) {
-                    Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.settings_title), tint = Color.Gray)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    var showClearDialog by remember { mutableStateOf(false) }
+
+                    if (showClearDialog) {
+                        AlertDialog(
+                            onDismissRequest = { showClearDialog = false },
+                            title = { Text(stringResource(R.string.clear_chat_title)) },
+                            text = { Text(stringResource(R.string.clear_chat_message)) },
+                            confirmButton = {
+                                TextButton(
+                                    onClick = {
+                                        viewModel.clearMessages()
+                                        showClearDialog = false
+                                    }
+                                ) {
+                                    Text(stringResource(R.string.confirm))
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showClearDialog = false }) {
+                                    Text(stringResource(R.string.cancel))
+                                }
+                            }
+                        )
+                    }
+
+                    IconButton(onClick = { showClearDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = stringResource(R.string.clear_chat),
+                            tint = Color.Gray
+                        )
+                    }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.settings_title), tint = Color.Gray)
+                    }
                 }
             }
 
@@ -376,6 +425,7 @@ fun ChatScreen(
                     .fillMaxWidth()
             ) {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 16.dp),
@@ -400,12 +450,13 @@ fun ChatScreen(
                     .padding(16.dp),
                 shape = MaterialTheme.shapes.extraLarge,
                 shadowElevation = 8.dp,
-                color = Color.White
+                color = Color(0xFFF5F5F5) // Very Light Gray background
             ) {
                 Row(
                     modifier = Modifier
                         .padding(horizontal = 8.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     // Switch Mode Button
                     IconButton(
@@ -424,19 +475,18 @@ fun ChatScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(56.dp)
-                                .padding(horizontal = 8.dp)
                                 .background(
                                     color = if (isListening) Color.LightGray else Color.White,
                                     shape = MaterialTheme.shapes.medium
                                 )
                                 .pointerInput(isModelReady, modelState) {
-                                    if (!isModelReady || modelState is VoskModelManager.ModelState.Error || modelState is VoskModelManager.ModelState.NotInitialized) {
+                                    if (!isModelReady || modelState is SherpaModelManager.ModelState.Error || modelState is SherpaModelManager.ModelState.NotInitialized) {
                                         detectTapGestures(
                                             onTap = {
-                                                // Only allow tap if not loading/downloading/unzipping
-                                                if (modelState is VoskModelManager.ModelState.NotInitialized || modelState is VoskModelManager.ModelState.Error) {
+                                                // Only allow tap if not loading
+                                                if (modelState is SherpaModelManager.ModelState.NotInitialized || modelState is SherpaModelManager.ModelState.Error) {
                                                     scope.launch {
-                                                        VoskModelManager.initModel(context, appLanguage)
+                                                        SherpaModelManager.initModel(context)
                                                     }
                                                 }
                                             }
@@ -460,13 +510,7 @@ fun ChatScreen(
                                                         
                                                         speechRecognizerManager.startListening(
                                                             onResultCallback = { result ->
-                                                                // If Chinese, remove spaces added by Vosk
-                                                                val cleanText = if (appLanguage == "zh") {
-                                                                    result.replace(" ", "")
-                                                                } else {
-                                                                    result
-                                                                }
-                                                                voiceResultText += cleanText
+                                                                voiceResultText = result
                                                             },
                                                             onErrorCallback = { error ->
                                                                 Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
@@ -489,8 +533,6 @@ fun ChatScreen(
                                                     speechRecognizerManager.cancel()
                                                 }
                                             } else {
-                                                // Permission launcher needs to be launched on Main thread too?
-                                                // ActivityResultLauncher.launch() is generally safe but let's be consistent
                                                 withContext(Dispatchers.Main) {
                                                     permissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
                                                 }
@@ -502,13 +544,8 @@ fun ChatScreen(
                         ) {
                             val text = when {
                                 isListening -> stringResource(R.string.voice_release_to_send)
-                                modelState is VoskModelManager.ModelState.Downloading -> {
-                                    val progress = (modelState as VoskModelManager.ModelState.Downloading).progress
-                                    stringResource(R.string.voice_model_downloading, (progress * 100).toInt())
-                                }
-                                modelState is VoskModelManager.ModelState.Unzipping -> stringResource(R.string.voice_model_unzipping)
-                                modelState is VoskModelManager.ModelState.Loading -> stringResource(R.string.voice_model_loading)
-                                modelState is VoskModelManager.ModelState.Error -> stringResource(R.string.voice_model_load_failed)
+                                modelState is SherpaModelManager.ModelState.Loading -> stringResource(R.string.voice_model_loading)
+                                modelState is SherpaModelManager.ModelState.Error -> stringResource(R.string.voice_model_load_failed)
                                 !isModelReady -> stringResource(R.string.voice_model_initializing)
                                 else -> stringResource(R.string.voice_hold_to_speak)
                             }
@@ -527,10 +564,11 @@ fun ChatScreen(
                             modifier = Modifier
                                 .weight(1f),
                             placeholder = { Text(stringResource(R.string.input_placeholder), color = Color.Gray) },
+                            shape = MaterialTheme.shapes.medium,
                             colors = TextFieldDefaults.colors(
-                                focusedContainerColor = Color.Transparent,
-                                unfocusedContainerColor = Color.Transparent,
-                                disabledContainerColor = Color.Transparent,
+                                focusedContainerColor = Color.White,
+                                unfocusedContainerColor = Color.White,
+                                disabledContainerColor = Color.White,
                                 focusedIndicatorColor = Color.Transparent,
                                 unfocusedIndicatorColor = Color.Transparent
                             ),
@@ -587,6 +625,7 @@ fun ChatScreen(
         }
 
         // Error / Service Check Overlay (Topmost)
+        // Error / Service Check Overlay (Topmost)
         if (uiState.error != null || uiState.missingAccessibilityService || uiState.missingOverlayPermission) {
             Box(
                 modifier = Modifier
@@ -619,23 +658,23 @@ fun ChatScreen(
                                 ) {
                                     Text(
                                         text = stringResource(R.string.accessibility_error),
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Button(
-                                    onClick = {
-                                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                        context.startActivity(intent)
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Button(
+                                        onClick = {
+                                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                            context.startActivity(intent)
+                                        }
+                                    ) {
+                                        Text(stringResource(R.string.enable_action))
                                     }
-                                ) {
-                                    Text(stringResource(R.string.enable_action))
                                 }
                             }
                         }
-                    }
                     }
 
                     if (uiState.missingOverlayPermission) {
@@ -654,26 +693,26 @@ fun ChatScreen(
                                 ) {
                                     Text(
                                         text = stringResource(R.string.overlay_error),
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Button(
-                                    onClick = {
-                                        val intent = Intent(
-                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            Uri.parse("package:${context.packageName}")
-                                        )
-                                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                        context.startActivity(intent)
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Button(
+                                        onClick = {
+                                            val intent = Intent(
+                                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                Uri.parse("package:${context.packageName}")
+                                            )
+                                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                            context.startActivity(intent)
+                                        }
+                                    ) {
+                                        Text(stringResource(R.string.grant_action))
                                     }
-                                ) {
-                                    Text(stringResource(R.string.grant_action))
                                 }
                             }
                         }
-                    }
                     }
 
                     if (uiState.error != null) {
@@ -692,17 +731,17 @@ fun ChatScreen(
                                 ) {
                                     Text(
                                         text = uiState.error!!,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Button(onClick = { viewModel.clearError() }) {
-                                    Text(stringResource(R.string.close))
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Button(onClick = { viewModel.clearError() }) {
+                                        Text(stringResource(R.string.close))
+                                    }
                                 }
                             }
                         }
-                    }
                     }
                 }
             }
@@ -716,6 +755,9 @@ fun MessageItem(message: UiMessage) {
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val containerColor = if (isUser) MaterialTheme.colorScheme.primary else Color.White
     val contentColor = if (isUser) MaterialTheme.colorScheme.onPrimary else Color.Black
+    
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -736,7 +778,16 @@ fun MessageItem(message: UiMessage) {
                 ),
             color = containerColor,
             shadowElevation = if (isUser) 0.dp else 2.dp,
-            modifier = Modifier.widthIn(max = 300.dp)
+            modifier = Modifier
+                .widthIn(max = 300.dp)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onLongPress = {
+                            clipboardManager.setText(AnnotatedString(message.content))
+                            Toast.makeText(context, context.getString(R.string.text_copied), Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                }
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 if (message.image != null) {
@@ -750,5 +801,4 @@ fun MessageItem(message: UiMessage) {
             }
         }
     }
-
 }

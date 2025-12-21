@@ -64,6 +64,16 @@
 
 祝您使用愉快！
 
+## 5. 开发者配置 (For Developers)
+
+如果您是开发者并希望在本地配置默认 API Key，请在项目根目录的 `local.properties` 文件中添加以下内容：
+
+```properties
+ZHIPU_API_KEY=your_actual_api_key_here
+```
+
+这样做的好处是 `local.properties` 默认被 git 忽略，不会将您的 Key 提交到代码仓库中。应用启动时会优先读取本地存储的 Key，如果没有则读取此配置作为默认值。
+
 ---
 
 ## 关注我

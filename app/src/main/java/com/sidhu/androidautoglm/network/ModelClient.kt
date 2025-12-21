@@ -24,10 +24,12 @@ interface OpenAIApi {
 class ModelClient(
     private val baseUrl: String,
     private val apiKey: String,
-    private val modelName: String
+    private val modelName: String,
+    private val isGemini: Boolean = false
 ) {
 
-    private val api: OpenAIApi
+    private val openAiApi: OpenAIApi?
+    private val geminiApi: GeminiApi?
 
     init {
         // val logging = HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.NONE }
@@ -39,27 +41,128 @@ class ModelClient(
             .build()
 
         val finalBaseUrl = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
+        Log.d("AutoGLM_Debug", "ModelClient initialized with Base URL: $finalBaseUrl")
         
-        api = Retrofit.Builder()
+        val retrofit = Retrofit.Builder()
             .baseUrl(finalBaseUrl)
             .client(client)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-            .create(OpenAIApi::class.java)
+
+        if (isGemini) {
+            openAiApi = null
+            geminiApi = retrofit.create(GeminiApi::class.java)
+        } else {
+            openAiApi = retrofit.create(OpenAIApi::class.java)
+            geminiApi = null
+        }
     }
 
     suspend fun sendRequest(history: List<Message>, screenshot: Bitmap?): String {
+        Log.d("AutoGLM_Debug", "ModelClient.sendRequest called. isGemini: $isGemini")
+        return if (isGemini) {
+            sendGeminiRequest(history)
+        } else {
+            sendOpenAIRequest(history)
+        }
+    }
+
+    private suspend fun sendGeminiRequest(history: List<Message>): String {
+        Log.d("AutoGLM_Debug", "sendGeminiRequest called")
+        if (geminiApi == null) {
+            Log.e("AutoGLM_Debug", "Gemini API not initialized")
+            return "Error: Gemini API not initialized"
+        }
+
+        val geminiContents = mutableListOf<GeminiContent>()
+        var currentRole: String? = null
+        var currentParts = mutableListOf<GeminiPart>()
+
+        history.forEach { msg ->
+            val mappedRole = if (msg.role == "system" || msg.role == "user") "user" else "model"
+            
+            val parts = mutableListOf<GeminiPart>()
+            if (msg.role == "system") {
+                 parts.add(GeminiPart(text = "System Instruction: ${msg.content}"))
+            } else if (msg.content is String) {
+                parts.add(GeminiPart(text = msg.content as String))
+            } else if (msg.content is List<*>) {
+                @Suppress("UNCHECKED_CAST")
+                val list = msg.content as List<ContentItem>
+                list.forEach { item ->
+                    if (item.type == "text") {
+                        parts.add(GeminiPart(text = item.text))
+                    } else if (item.type == "image_url") {
+                        val url = item.imageUrl?.url ?: ""
+                        if (url.startsWith("data:")) {
+                            val commaIndex = url.indexOf(",")
+                            if (commaIndex != -1) {
+                                val base64Data = url.substring(commaIndex + 1)
+                                val mimeType = url.substring(5, url.indexOf(";"))
+                                parts.add(GeminiPart(inline_data = GeminiInlineData(mimeType, base64Data)))
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (mappedRole == currentRole) {
+                currentParts.addAll(parts)
+            } else {
+                if (currentRole != null) {
+                    geminiContents.add(GeminiContent(role = currentRole!!, parts = currentParts.toList()))
+                }
+                currentRole = mappedRole
+                currentParts = parts.toMutableList()
+            }
+        }
+        
+        if (currentRole != null) {
+            geminiContents.add(GeminiContent(role = currentRole!!, parts = currentParts.toList()))
+        }
+
+        val request = GeminiRequest(
+            contents = geminiContents,
+            generationConfig = GeminiGenerationConfig(temperature = 0.0)
+        )
+        Log.d("AutoGLM_Debug", "Gemini Request prepared. Content count: ${geminiContents.size}")
+
+        try {
+            // Default model fallback if not specified properly for Gemini
+            val model = if (modelName.isBlank() || modelName == "autoglm-phone") "gemini-1.5-flash-latest" else modelName
+            Log.d("AutoGLM_Debug", "Calling Gemini API with model: $model")
+            val response = geminiApi.generateContent(model, apiKey, request)
+            if (response.isSuccessful) {
+                Log.d("AutoGLM_Debug", "Gemini API success")
+                val text = response.body()?.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
+                return text ?: ""
+            } else {
+                val errorBody = response.errorBody()?.string()
+                Log.e("AutoGLM_Debug", "Gemini API Error: $errorBody")
+                return "Error: ${response.code()} $errorBody"
+            }
+        } catch (e: Exception) {
+            Log.e("AutoGLM_Debug", "Gemini API Exception", e)
+            val errorMessage = when (e) {
+                is javax.net.ssl.SSLHandshakeException -> "Network Error: SSL Handshake failed. Check your VPN or Proxy settings."
+                is java.net.SocketTimeoutException -> "Network Error: Connection timed out. Check your internet connection."
+                is java.net.UnknownHostException -> "Network Error: Unknown host. Check the Base URL."
+                else -> "Error: ${e.message}"
+            }
+            return errorMessage
+        }
+    }
+
+    private suspend fun sendOpenAIRequest(history: List<Message>): String {
+        Log.d("AutoGLM_Debug", "sendOpenAIRequest called")
+        if (openAiApi == null) {
+            Log.e("AutoGLM_Debug", "OpenAI API not initialized")
+            return "Error: OpenAI API not initialized"
+        }
+        
         // Prepare messages
         val messages = mutableListOf<Message>()
-        
-        // System Prompt (First time only? Or always? Usually always as first message)
-        // But the caller manages history. We just assume history has User/Assistant messages.
-        // We need to inject System prompt if not present, but better let ViewModel handle full history.
-        // Wait, for Multi-modal, we usually send [System, User(Text+Image), Assistant, User(Text+Image)...]
-        
-        // Here we just accept the full history prepared by ViewModel
-        // But we might need to attach the LATEST screenshot to the LAST User message if it's missing?
-        // Let's assume ViewModel handles the structure.
+        // ... (Logic continues as before, but using `history` directly)
         
         val request = ChatRequest(
             model = modelName,
@@ -68,7 +171,7 @@ class ModelClient(
         )
         
         try {
-            val response = api.chatCompletion("Bearer $apiKey", request)
+            val response = openAiApi.chatCompletion("Bearer $apiKey", request)
             if (response.isSuccessful) {
                 return response.body()?.choices?.firstOrNull()?.message?.content ?: ""
             } else {

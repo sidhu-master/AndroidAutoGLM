@@ -26,6 +26,7 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.AndroidAutoGLM"
+        android:usesCleartextTraffic="true"
         tools:targetApi="31">
         
         <activity

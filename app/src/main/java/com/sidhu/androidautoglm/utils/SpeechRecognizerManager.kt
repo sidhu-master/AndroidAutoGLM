@@ -1,42 +1,57 @@
 package com.sidhu.androidautoglm.utils
 
+import android.annotation.SuppressLint
 import android.content.Context
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import org.json.JSONObject
-import org.vosk.Recognizer
-import org.vosk.android.RecognitionListener
-import org.vosk.android.SpeechService
+import kotlinx.coroutines.withContext
+import kotlin.math.log10
+import kotlin.math.sqrt
 
 class SpeechRecognizerManager(private val context: Context) {
 
-    private var speechService: SpeechService? = null
     private val _isListening = MutableStateFlow(false)
     val isListening: StateFlow<Boolean> = _isListening
 
     private val _soundLevel = MutableStateFlow(0f)
     val soundLevel: StateFlow<Float> = _soundLevel
 
+    private var audioRecord: AudioRecord? = null
+    private var recordingJob: Job? = null
+    private val scope = CoroutineScope(Dispatchers.IO)
+    
+    // Buffer to hold the entire utterance for offline recognition
+    private val audioBuffer = ArrayList<Float>()
+    
     private var onResult: ((String) -> Unit)? = null
     private var onError: ((String) -> Unit)? = null
 
-    // For simulated sound level
-    private var soundLevelJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.Main)
+    companion object {
+        private const val SAMPLE_RATE = 16000
+        private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
+        private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+    }
 
+    @SuppressLint("MissingPermission")
     fun startListening(
         onResultCallback: (String) -> Unit,
         onErrorCallback: (String) -> Unit
     ) {
-        val model = VoskModelManager.model
-        if (model == null) {
-            onErrorCallback("Model not loaded yet")
+        val modelState = SherpaModelManager.modelState.value
+        if (SherpaModelManager.recognizer == null) {
+            if (modelState is SherpaModelManager.ModelState.Error) {
+                onErrorCallback("Model Error: ${(modelState as SherpaModelManager.ModelState.Error).message}")
+            } else {
+                onErrorCallback("Model not loaded yet")
+            }
             return
         }
 
@@ -44,117 +59,134 @@ class SpeechRecognizerManager(private val context: Context) {
 
         onResult = onResultCallback
         onError = onErrorCallback
+        audioBuffer.clear()
 
         try {
-            val recognizer = Recognizer(model, 16000.0f)
-            speechService = SpeechService(recognizer, 16000.0f)
-            speechService?.startListening(object : RecognitionListener {
-                override fun onPartialResult(hypothesis: String?) {
-                    // hypothesis is JSON: { "partial" : "text" }
-                }
+            val minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+            audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                SAMPLE_RATE,
+                CHANNEL_CONFIG,
+                AUDIO_FORMAT,
+                minBufferSize * 2
+            )
 
-                override fun onResult(hypothesis: String?) {
-                    // hypothesis is JSON: { "text" : "text" }
-                    if (hypothesis != null) {
-                        try {
-                            val json = JSONObject(hypothesis)
-                            val text = json.optString("text", "")
-                            if (text.isNotEmpty()) {
-                                onResult?.invoke(text)
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-                    }
-                }
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                onErrorCallback("AudioRecord initialization failed")
+                return
+            }
 
-                override fun onFinalResult(hypothesis: String?) {
-                    // hypothesis is JSON: { "text" : "text" }
-                    if (hypothesis != null) {
-                        try {
-                            val json = JSONObject(hypothesis)
-                            val text = json.optString("text", "")
-                            if (text.isNotEmpty()) {
-                                onResult?.invoke(text)
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-                    }
-                }
-
-                override fun onError(exception: Exception?) {
-                    _isListening.value = false
-                    stopSimulatingSoundLevel()
-                    onError?.invoke(exception?.message ?: "Unknown error")
-                }
-
-                override fun onTimeout() {
-                    _isListening.value = false
-                    stopSimulatingSoundLevel()
-                    onError?.invoke("Timeout")
-                }
-            })
+            audioRecord?.startRecording()
             _isListening.value = true
-            startSimulatingSoundLevel()
+            
+            startRecordingLoop()
+            
         } catch (e: Exception) {
             e.printStackTrace()
             _isListening.value = false
-            stopSimulatingSoundLevel()
-            onErrorCallback(e.message ?: "Failed to start Vosk")
+            onErrorCallback(e.message ?: "Failed to start recording")
+        }
+    }
+
+    private fun startRecordingLoop() {
+        recordingJob = scope.launch {
+            // Read in smaller chunks for smoother UI updates (e.g. 32ms @ 16kHz)
+            val readSize = 512 
+            val buffer = ShortArray(readSize)
+            while (_isListening.value) {
+                val read = audioRecord?.read(buffer, 0, readSize) ?: 0
+                if (read > 0) {
+                    // Convert to float and append to global buffer
+                    val floatSamples = FloatArray(read)
+                    var sum = 0.0
+                    for (i in 0 until read) {
+                        val sample = buffer[i] / 32768.0f
+                        floatSamples[i] = sample
+                        sum += sample * sample
+                    }
+                    
+                    synchronized(audioBuffer) {
+                        for (sample in floatSamples) {
+                            audioBuffer.add(sample)
+                        }
+                    }
+
+                    // Calculate RMS for UI
+                    if (read > 0) {
+                        val rms = sqrt(sum / read)
+                        val db = if (rms > 0) 20 * log10(rms) else -50.0
+                        _soundLevel.value = db.toFloat()
+                    }
+                }
+            }
         }
     }
 
     suspend fun stopListening() {
-        withContext(Dispatchers.IO) {
-            try {
-                speechService?.stop()
-                speechService?.shutdown()
-                speechService = null
-            } catch (e: Exception) {
-                e.printStackTrace()
-            } finally {
-                _isListening.value = false
-                _soundLevel.value = 0f
-                stopSimulatingSoundLevel()
-            }
-        }
-    }
-    
-    suspend fun cancel() {
-        stopListening()
-    }
+        if (!_isListening.value) return
 
-    suspend fun reset() {
-        stopListening()
-    }
-
-    fun destroy() {
+        _isListening.value = false
+        _soundLevel.value = 0f
+        
         try {
-            speechService?.shutdown()
-            speechService = null
+            recordingJob?.cancel()
+            recordingJob?.join() // Wait for loop to finish
+            
+            audioRecord?.stop()
+            audioRecord?.release()
+            audioRecord = null
+            
+            // Process the accumulated audio
+            processAudio()
+            
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        stopSimulatingSoundLevel()
     }
     
-    private fun startSimulatingSoundLevel() {
-        soundLevelJob?.cancel()
-        soundLevelJob = scope.launch {
-            while (_isListening.value) {
-                // Random float between -2 and 10
-                val randomLevel = -2f + (Math.random() * 12f).toFloat()
-                _soundLevel.value = randomLevel
-                delay(100)
+    private suspend fun processAudio() {
+        val recognizer = SherpaModelManager.recognizer ?: return
+        
+        val samples: FloatArray
+        synchronized(audioBuffer) {
+            if (audioBuffer.isEmpty()) return
+            samples = audioBuffer.toFloatArray()
+        }
+        
+        try {
+            val stream = recognizer.createStream()
+            stream.acceptWaveform(samples, SAMPLE_RATE)
+            recognizer.decode(stream)
+            val result = recognizer.getResult(stream)
+            
+            if (result.text.isNotBlank()) {
+                withContext(Dispatchers.Main) {
+                    onResult?.invoke(result.text)
+                }
             }
-            _soundLevel.value = 0f
+            
+            stream.release()
+            
+        } catch (e: Exception) {
+            e.printStackTrace()
+            withContext(Dispatchers.Main) {
+                onError?.invoke("Recognition failed: ${e.message}")
+            }
         }
     }
-    
-    private fun stopSimulatingSoundLevel() {
-        soundLevelJob?.cancel()
-        soundLevelJob = null
-        _soundLevel.value = 0f
+
+    suspend fun cancel() {
+        _isListening.value = false
+        recordingJob?.cancel()
+        audioRecord?.stop()
+        audioRecord?.release()
+        audioRecord = null
+        synchronized(audioBuffer) {
+            audioBuffer.clear()
+        }
+    }
+
+    fun destroy() {
+        scope.launch { cancel() }
     }
 }

@@ -30,6 +30,8 @@ import kotlinx.coroutines.withContext
 import android.content.ComponentName
 import android.text.TextUtils
 
+import com.sidhu.androidautoglm.BuildConfig
+
 data class ChatUiState(
     val messages: List<UiMessage> = emptyList(),
     val isLoading: Boolean = false,
@@ -39,6 +41,7 @@ data class ChatUiState(
     val missingOverlayPermission: Boolean = false,
     val apiKey: String = "",
     val baseUrl: String = "https://open.bigmodel.cn/api/paas/v4", // Official ZhipuAI Endpoint
+    val isGemini: Boolean = false,
     val modelName: String = "autoglm-phone"
 )
 
@@ -60,11 +63,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     init {
-        val savedKey = prefs.getString("api_key", "") ?: ""
+        // Load API Key: Prefer saved key, fallback to BuildConfig default
+        val savedKeyRaw = prefs.getString("api_key", "") ?: ""
+        val savedKey = if (savedKeyRaw.isNotBlank()) savedKeyRaw else BuildConfig.DEFAULT_API_KEY
         
+        val savedBaseUrl = prefs.getString("base_url", "https://open.bigmodel.cn/api/paas/v4") ?: "https://open.bigmodel.cn/api/paas/v4"
+        val savedIsGemini = prefs.getBoolean("is_gemini", false)
+        val savedModelName = prefs.getString("model_name", "autoglm-phone") ?: "autoglm-phone"
+        
+        _uiState.value = _uiState.value.copy(
+            apiKey = savedKey,
+            baseUrl = savedBaseUrl,
+            isGemini = savedIsGemini,
+            modelName = savedModelName
+        )
+
         if (savedKey.isNotEmpty()) {
-            _uiState.value = _uiState.value.copy(apiKey = savedKey)
-            modelClient = ModelClient(_uiState.value.baseUrl, savedKey, _uiState.value.modelName)
+            modelClient = ModelClient(savedBaseUrl, savedKey, savedModelName, savedIsGemini)
         }
         
         // Observe service connection status
@@ -85,16 +100,55 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val actionExecutor: ActionExecutor?
         get() = AutoGLMService.getInstance()?.let { ActionExecutor(it) }
     
+    // Debug Mode Flag - set to true to bypass permission checks and service requirements
+    private val DEBUG_MODE = false
+
     // Conversation history for the API
     private val apiHistory = mutableListOf<Message>()
 
-    fun updateApiKey(apiKey: String) {
-        _uiState.value = _uiState.value.copy(apiKey = apiKey)
-        prefs.edit().putString("api_key", apiKey).apply()
+    fun updateSettings(apiKey: String, baseUrl: String, isGemini: Boolean, modelName: String) {
+        val finalBaseUrl = if (baseUrl.isBlank()) {
+            if (isGemini) "https://generativelanguage.googleapis.com" else "https://open.bigmodel.cn/api/paas/v4"
+        } else baseUrl
         
-        // Re-init client with new key and existing url/model
-        val state = _uiState.value
-        modelClient = ModelClient(state.baseUrl, apiKey, state.modelName)
+        val finalModelName = if (modelName.isBlank()) {
+            if (isGemini) "gemini-2.0-flash-exp" else "autoglm-phone"
+        } else modelName
+        
+        // Save to SharedPreferences
+        prefs.edit().apply {
+            // If the key is the same as the default key, save empty string to indicate "use default"
+            // Or if user explicitly cleared it (empty string), it also means use default.
+            val keyToSave = if (apiKey == BuildConfig.DEFAULT_API_KEY) "" else apiKey
+            putString("api_key", keyToSave)
+            putString("base_url", finalBaseUrl)
+            putBoolean("is_gemini", isGemini)
+            putString("model_name", finalModelName)
+            apply()
+        }
+
+        // Update UI State
+        // IMPORTANT: In UI State, we must reflect the ACTUAL usable key (Default or Custom), 
+        // not the empty string from storage, so that SettingsScreen can detect it matches DEFAULT_API_KEY.
+        val effectiveKey = if (apiKey.isBlank()) BuildConfig.DEFAULT_API_KEY else apiKey
+        
+        _uiState.value = _uiState.value.copy(
+            apiKey = effectiveKey,
+            baseUrl = finalBaseUrl,
+            isGemini = isGemini,
+            modelName = finalModelName,
+            error = null // Clear any previous errors
+        )
+
+        // Re-initialize ModelClient
+        if (effectiveKey.isNotEmpty()) {
+            modelClient = ModelClient(finalBaseUrl, effectiveKey, finalModelName, isGemini)
+        }
+    }
+
+    fun updateApiKey(apiKey: String) {
+        // Deprecated, use updateSettings instead but keeping for compatibility if needed temporarily
+        updateSettings(apiKey, _uiState.value.baseUrl, _uiState.value.isGemini, _uiState.value.modelName)
     }
 
     fun checkServiceStatus() {
@@ -147,37 +201,60 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         service?.updateFloatingStatus(getApplication<Application>().getString(R.string.status_stopped))
     }
 
+    fun clearMessages() {
+        _uiState.value = _uiState.value.copy(messages = emptyList())
+        apiHistory.clear()
+        
+        // Add welcome message if needed, or keep empty
+        // _uiState.value = _uiState.value.copy(messages = listOf(UiMessage("assistant", getApplication<Application>().getString(R.string.welcome_message))))
+    }
+
     fun sendMessage(text: String) {
+        Log.d("AutoGLM_Debug", "sendMessage called with text: $text")
         if (text.isBlank()) return
         
         if (modelClient == null) {
+            Log.d("AutoGLM_Debug", "modelClient is null, initializing...")
             // Try to init with current state if not init
-             modelClient = ModelClient(_uiState.value.baseUrl, _uiState.value.apiKey, _uiState.value.modelName)
+             modelClient = ModelClient(
+                 _uiState.value.baseUrl, 
+                 _uiState.value.apiKey, 
+                 _uiState.value.modelName,
+                 _uiState.value.isGemini
+             )
+             Log.d("AutoGLM_Debug", "modelClient initialized. isGemini: ${_uiState.value.isGemini}")
+        } else {
+             Log.d("AutoGLM_Debug", "modelClient already initialized")
         }
 
         if (_uiState.value.apiKey.isBlank()) {
+            Log.d("AutoGLM_Debug", "API Key is blank")
             _uiState.value = _uiState.value.copy(error = getApplication<Application>().getString(R.string.error_api_key_missing))
             return
         }
 
         val service = AutoGLMService.getInstance()
-        if (service == null) {
-            val context = getApplication<Application>()
-            if (isAccessibilityServiceEnabled(context, AutoGLMService::class.java)) {
-                 _uiState.value = _uiState.value.copy(error = getApplication<Application>().getString(R.string.error_service_not_connected))
-            } else {
-                 _uiState.value = _uiState.value.copy(missingAccessibilityService = true)
+        Log.d("AutoGLM_Debug", "Service instance: $service, DEBUG_MODE: $DEBUG_MODE")
+        if (!DEBUG_MODE) {
+            if (service == null) {
+                val context = getApplication<Application>()
+                if (isAccessibilityServiceEnabled(context, AutoGLMService::class.java)) {
+                     _uiState.value = _uiState.value.copy(error = getApplication<Application>().getString(R.string.error_service_not_connected))
+                } else {
+                     _uiState.value = _uiState.value.copy(missingAccessibilityService = true)
+                }
+                return
             }
-            return
-        }
 
-        // Check overlay permission again before starting
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(getApplication())) {
-             _uiState.value = _uiState.value.copy(missingOverlayPermission = true)
-             return
+            // Check overlay permission again before starting
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(getApplication())) {
+                 _uiState.value = _uiState.value.copy(missingOverlayPermission = true)
+                 return
+            }
         }
 
         viewModelScope.launch(Dispatchers.IO) {
+            Log.d("AutoGLM_Debug", "Coroutine started")
             _uiState.value = _uiState.value.copy(
                 messages = _uiState.value.messages + UiMessage("user", text),
                 isLoading = true,
@@ -195,40 +272,53 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var step = 0
             val maxSteps = 20
             
-            // Show floating window and minimize app
-            withContext(Dispatchers.Main) {
-                service.showFloatingWindow {
-                    stopTask()
+            if (!DEBUG_MODE && service != null) {
+                // Show floating window and minimize app
+                withContext(Dispatchers.Main) {
+                    service.showFloatingWindow {
+                        stopTask()
+                    }
+                    service.setTaskRunning(true)
+                    service.goHome()
                 }
-                service.setTaskRunning(true)
-                service.goHome()
+                delay(1000) // Wait for animation and window to appear
             }
-            delay(1000) // Wait for animation and window to appear
 
             var isFinished = false
 
             try {
                 while (_uiState.value.isRunning && step < maxSteps) {
                     step++
+                    Log.d("AutoGLM_Debug", "Step: $step")
                     
-                    service.updateFloatingStatus(getApplication<Application>().getString(R.string.status_thinking))
+                    if (!DEBUG_MODE && service != null) {
+                        service.updateFloatingStatus(getApplication<Application>().getString(R.string.status_thinking))
+                    }
                     
                     // 1. Take Screenshot
-                    val screenshot = service.takeScreenshot()
+                    Log.d("AutoGLM_Debug", "Taking screenshot...")
+                    val screenshot = if (DEBUG_MODE) {
+                        Bitmap.createBitmap(1080, 2400, Bitmap.Config.ARGB_8888)
+                    } else {
+                        service?.takeScreenshot()
+                    }
+
                     if (screenshot == null) {
+                        Log.e("AutoGLM_Debug", "Screenshot failed")
                         postError(getApplication<Application>().getString(R.string.error_screenshot_failed))
                         break
                     }
+                    Log.d("AutoGLM_Debug", "Screenshot taken: ${screenshot.width}x${screenshot.height}")
                     
                     // Use service dimensions for consistency with coordinate system
-                    val screenWidth = service.getScreenWidth()
-                    val screenHeight = service.getScreenHeight()
+                    val screenWidth = if (DEBUG_MODE) 1080 else service?.getScreenWidth() ?: 1080
+                    val screenHeight = if (DEBUG_MODE) 2400 else service?.getScreenHeight() ?: 2400
                     
                     Log.d("ChatViewModel", "Screenshot size: ${screenshot.width}x${screenshot.height}")
                     Log.d("ChatViewModel", "Service screen size: ${screenWidth}x${screenHeight}")
 
                     // 2. Build User Message
-                    val currentApp = AutoGLMService.getInstance()?.currentApp?.value ?: "Unknown"
+                    val currentApp = if (DEBUG_MODE) "DebugApp" else (service?.currentApp?.value ?: "Unknown")
                     val screenInfo = "{\"current_app\": \"$currentApp\"}"
                     
                     val textPrompt = if (step == 1) {
@@ -245,9 +335,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     apiHistory.add(userMessage)
 
                     // 3. Call API
+                    Log.d("AutoGLM_Debug", "Sending request to ModelClient...")
                     val responseText = modelClient?.sendRequest(apiHistory, screenshot) ?: "Error: Client null"
+                    Log.d("AutoGLM_Debug", "Response received: ${responseText.take(100)}...")
                     
                     if (responseText.startsWith("Error")) {
+                        Log.e("AutoGLM_Debug", "API Error: $responseText")
                         postError(responseText)
                         break
                     }
@@ -269,11 +362,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         messages = _uiState.value.messages + UiMessage("assistant", responseText)
                     )
 
+                    // If DEBUG_MODE, stop here after one round
+                    if (DEBUG_MODE) {
+                        Log.d("AutoGLM_Debug", "DEBUG_MODE enabled, stopping after one round")
+                        _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
+                        break
+                    }
+
                     // 4. Parse Action
                     val action = ActionParser.parse(responseText, screenWidth, screenHeight)
-
+                    
                     // Update Floating Window Status with friendly description
-                    service.updateFloatingStatus(getActionDescription(action))
+                    service?.updateFloatingStatus(getActionDescription(action))
                     
                     // 5. Execute Action
                     val executor = actionExecutor
@@ -287,8 +387,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     if (action is Action.Finish) {
                         isFinished = true
                         _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
-                        service.setTaskRunning(false)
-                        service.updateFloatingStatus(getApplication<Application>().getString(R.string.action_finish))
+                        service?.setTaskRunning(false)
+                        service?.updateFloatingStatus(getApplication<Application>().getString(R.string.action_finish))
                         break
                     }
                     
@@ -302,15 +402,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+                Log.e("AutoGLM_Debug", "Exception in sendMessage loop: ${e.message}", e)
                 postError(getApplication<Application>().getString(R.string.error_runtime_exception, e.message))
             }
             
             if (!isFinished && _uiState.value.isRunning) {
                 _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
-                service.setTaskRunning(false)
-                
-                if (step >= maxSteps) {
-                    service.updateFloatingStatus(getApplication<Application>().getString(R.string.error_task_terminated_max_steps))
+                if (!DEBUG_MODE) {
+                    service?.setTaskRunning(false)
+                    if (step >= maxSteps) {
+                        service?.updateFloatingStatus(getApplication<Application>().getString(R.string.error_task_terminated_max_steps))
+                    }
                 }
             }
         }

@@ -20,6 +20,19 @@
     <string name="hide_api_key">Hide API Key</string>
     <string name="show_api_key">Show API Key</string>
     <string name="api_key_placeholder">Please enter your API Key</string>
+    <string name="api_key_default_masked">Default API Key (Hidden)</string>
+    <string name="api_key_default_edit_placeholder">Default Key is active. Type new Key to override.</string>
+    <string name="base_url_label">Base URL</string>
+    <string name="enter_base_url">Enter Base URL</string>
+    <string name="base_url_placeholder">https://open.bigmodel.cn/api/paas/v4</string>
+    <string name="model_name_label">Model Name</string>
+    <string name="enter_model_name">Enter Model Name</string>
+    <string name="model_name_placeholder">autoglm-phone</string>
+    <string name="api_type_label">API Type</string>
+    <string name="api_type_openai">OpenAI (Zhipu/ChatGPT/DeepSeek/Self-hosted etc.)</string>
+    <string name="api_type_openai_title">OpenAI</string>
+    <string name="api_type_openai_desc">Supports Zhipu AI, ChatGPT, DeepSeek, and other OpenAI-compatible services</string>
+    <string name="api_type_gemini">Google Gemini</string>
     <string name="current_model">Current Model: %1$s</string>
     <string name="cancel">Cancel</string>
     <string name="save">Save</string>
@@ -80,4 +93,9 @@
     <string name="voice_listening">Listening...</string>
     <string name="switch_input_mode">Switch Input Mode</string>
     <string name="voice_cancel">Cancel</string>
+    <string name="text_copied">Text copied</string>
+    <string name="clear_chat">Clear Chat</string>
+    <string name="clear_chat_title">Clear Chat History</string>
+    <string name="clear_chat_message">Are you sure you want to clear all chat history?</string>
+    <string name="confirm">Confirm</string>
 </resources>

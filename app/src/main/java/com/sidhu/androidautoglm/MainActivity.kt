@@ -51,6 +51,9 @@ class MainActivity : ComponentActivity() {
                         composable("settings") {
                             SettingsScreen(
                                 apiKey = uiState.apiKey,
+                                baseUrl = uiState.baseUrl,
+                                isGemini = uiState.isGemini,
+                                modelName = uiState.modelName,
                                 currentLanguage = savedLang,
                                 onLanguageChange = { newLang ->
                                     val editor = prefs.edit()
@@ -60,8 +63,8 @@ class MainActivity : ComponentActivity() {
                                     finish()
                                     startActivity(intent)
                                 },
-                                onSave = { newKey ->
-                                    viewModel.updateApiKey(newKey)
+                                onSave = { newKey, newBaseUrl, newIsGemini, newModelName ->
+                                    viewModel.updateSettings(newKey, newBaseUrl, newIsGemini, newModelName)
                                 },
                                 onBack = { navController.popBackStack() },
                                 onOpenDocumentation = { navController.navigate("documentation") }

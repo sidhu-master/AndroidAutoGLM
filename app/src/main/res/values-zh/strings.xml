@@ -20,6 +20,19 @@
     <string name="hide_api_key">隐藏 API Key</string>
     <string name="show_api_key">显示 API Key</string>
     <string name="api_key_placeholder">请输入您的 API Key</string>
+    <string name="api_key_default_masked">默认 API Key (已隐藏)</string>
+    <string name="api_key_default_edit_placeholder">默认 Key 生效中，输入新 Key 可覆盖。</string>
+    <string name="base_url_label">Base URL</string>
+    <string name="enter_base_url">填入 Base URL</string>
+    <string name="base_url_placeholder">https://open.bigmodel.cn/api/paas/v4</string>
+    <string name="model_name_label">模型名称</string>
+    <string name="enter_model_name">填入模型名称</string>
+    <string name="model_name_placeholder">autoglm-phone</string>
+    <string name="api_type_label">API 类型</string>
+    <string name="api_type_openai">OpenAI (智谱/ChatGPT/DeepSeek/自建服务器等)</string>
+    <string name="api_type_openai_title">OpenAI</string>
+    <string name="api_type_openai_desc">支持智谱AI、ChatGPT、DeepSeek 以及其他兼容 OpenAI 接口的模型服务</string>
+    <string name="api_type_gemini">Google Gemini</string>
     <string name="current_model">当前模型: %1$s</string>
     <string name="cancel">取消</string>
     <string name="save">保存</string>
@@ -80,4 +93,9 @@
     <string name="voice_listening">正在聆听...</string>
     <string name="switch_input_mode">切换输入模式</string>
     <string name="voice_cancel">取消</string>
+    <string name="text_copied">文本已复制</string>
+    <string name="clear_chat">清空对话</string>
+    <string name="clear_chat_title">清空聊天记录</string>
+    <string name="clear_chat_message">确定要清空所有聊天记录吗？</string>
+    <string name="confirm">确定</string>
 </resources>
