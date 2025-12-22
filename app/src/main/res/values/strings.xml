@@ -25,6 +25,8 @@
     <string name="base_url_label">Base URL</string>
     <string name="enter_base_url">Enter Base URL</string>
     <string name="base_url_placeholder">https://open.bigmodel.cn/api/paas/v4</string>
+    <string name="base_url_hint_gemini">Example: https://generativelanguage.googleapis.com</string>
+    <string name="base_url_hint_openai">Example: https://api.deepseek.com or https://api.deepseek.com/v1 (Do not include /chat/completions)</string>
     <string name="model_name_label">Model Name</string>
     <string name="enter_model_name">Enter Model Name</string>
     <string name="model_name_placeholder">autoglm-phone</string>
@@ -41,6 +43,25 @@
     <string name="language_label">Language</string>
     <string name="language_english">English</string>
     <string name="language_chinese">Chinese</string>
+
+    <!-- App Map Settings -->
+    <string name="app_map_settings_title">App Map Settings</string>
+    <string name="app_map_desc">Configure app package name mapping</string>
+    <string name="tab_json_edit">JSON Edit</string>
+    <string name="tab_entry_edit">Entry Edit</string>
+    <string name="json_parse_error">Failed to parse JSON or empty, please check format.</string>
+    <string name="no_app_map_entries">No app mappings found. Add one using the button below.</string>
+    <string name="label_app_name">App Name / Keyword</string>
+    <string name="label_package_name">Package Name</string>
+    <string name="add_entry">Add Entry</string>
+    <string name="save_success">Saved successfully</string>
+    <string name="app_map_json_label">App Map JSON</string>
+    <string name="app_map_json_support">Edit JSON file directly.</string>
+    <string name="dismiss">Dismiss</string>
+    <string name="delete">Delete</string>
+    <string name="error_parse_json">Failed to parse app_map.json.</string>
+    <string name="error_save_settings">Failed to save settings.</string>
+    <string name="error_invalid_json">Invalid JSON syntax. Please check your input.</string>
 
     <!-- Floating Window -->
     <string name="fw_ready">Ready</string>

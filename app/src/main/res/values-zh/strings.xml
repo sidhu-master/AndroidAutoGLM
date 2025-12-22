@@ -25,6 +25,8 @@
     <string name="base_url_label">Base URL</string>
     <string name="enter_base_url">填入 Base URL</string>
     <string name="base_url_placeholder">https://open.bigmodel.cn/api/paas/v4</string>
+    <string name="base_url_hint_gemini">示例: https://generativelanguage.googleapis.com</string>
+    <string name="base_url_hint_openai">示例: https://api.deepseek.com 或 https://api.deepseek.com/v1 (请勿包含 /chat/completions)</string>
     <string name="model_name_label">模型名称</string>
     <string name="enter_model_name">填入模型名称</string>
     <string name="model_name_placeholder">autoglm-phone</string>
@@ -41,6 +43,25 @@
     <string name="language_label">语言</string>
     <string name="language_english">English</string>
     <string name="language_chinese">中文</string>
+
+    <!-- App Map Settings -->
+    <string name="app_map_settings_title">应用映射配置</string>
+    <string name="app_map_desc">自定义应用名称与包名的对应关系</string>
+    <string name="tab_json_edit">JSON 编辑</string>
+    <string name="tab_entry_edit">条目编辑</string>
+    <string name="json_parse_error">JSON 解析失败或为空，请检查 JSON 格式。</string>
+    <string name="no_app_map_entries">当前没有应用映射，请点击右下角按钮添加。</string>
+    <string name="label_app_name">应用名称 / 关键词</string>
+    <string name="label_package_name">包名</string>
+    <string name="add_entry">添加条目</string>
+    <string name="save_success">保存成功</string>
+    <string name="app_map_json_label">App Map JSON</string>
+    <string name="app_map_json_support">直接编辑JSON文件。</string>
+    <string name="dismiss">关闭</string>
+    <string name="delete">删除</string>
+    <string name="error_parse_json">无法解析 app_map.json。</string>
+    <string name="error_save_settings">保存设置失败。</string>
+    <string name="error_invalid_json">无效的 JSON 语法，请检查输入。</string>
 
     <!-- Floating Window -->
     <string name="fw_ready">准备就绪</string>

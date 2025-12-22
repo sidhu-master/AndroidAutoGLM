@@ -36,7 +36,8 @@ fun SettingsScreen(
     onLanguageChange: (String) -> Unit,
     onSave: (String, String, Boolean, String) -> Unit,
     onBack: () -> Unit,
-    onOpenDocumentation: () -> Unit
+    onOpenDocumentation: () -> Unit,
+    onOpenAppMapSettings: () -> Unit
 ) {
     val isDefaultKey = apiKey == BuildConfig.DEFAULT_API_KEY && BuildConfig.DEFAULT_API_KEY.isNotEmpty()
 
@@ -258,8 +259,8 @@ fun SettingsScreen(
                             placeholder = { Text(stringResource(R.string.base_url_placeholder)) },
                             supportingText = {
                                 Text(
-                                    text = if (newIsGemini) "示例: https://generativelanguage.googleapis.com" 
-                                           else "示例: https://api.deepseek.com 或 https://api.deepseek.com/v1 (请勿包含 /chat/completions)",
+                                    text = if (newIsGemini) stringResource(R.string.base_url_hint_gemini) 
+                                           else stringResource(R.string.base_url_hint_openai),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -392,6 +393,39 @@ fun SettingsScreen(
                 }
             }
 
+            // App Map Settings
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                onClick = onOpenAppMapSettings
+            ) {
+                Row(
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text(
+                            text = stringResource(R.string.app_map_settings_title),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Text(
+                            text = stringResource(R.string.app_map_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.OpenInNew,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
+            
             // Documentation Link
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -438,6 +472,7 @@ fun SettingsScreenPreview() {
         onLanguageChange = {},
         onSave = { _, _, _, _ -> },
         onBack = {},
-        onOpenDocumentation = {}
+        onOpenDocumentation = {},
+        onOpenAppMapSettings = {}
     )
 }

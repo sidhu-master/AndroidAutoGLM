@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.sidhu.androidautoglm.ui.AppMapSettingsScreen
 import com.sidhu.androidautoglm.ui.ChatScreen
 import com.sidhu.androidautoglm.ui.ChatViewModel
 import com.sidhu.androidautoglm.ui.SettingsScreen
@@ -67,12 +68,18 @@ class MainActivity : ComponentActivity() {
                                     viewModel.updateSettings(newKey, newBaseUrl, newIsGemini, newModelName)
                                 },
                                 onBack = { navController.popBackStack() },
-                                onOpenDocumentation = { navController.navigate("documentation") }
+                                onOpenDocumentation = { navController.navigate("documentation") },
+                                onOpenAppMapSettings = { navController.navigate("app_map_settings") }
                             )
                         }
                         composable("documentation") {
                             MarkdownViewerScreen(
                                 initialLanguage = savedLang,
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+                        composable("app_map_settings") {
+                            AppMapSettingsScreen(
                                 onBack = { navController.popBackStack() }
                             )
                         }
