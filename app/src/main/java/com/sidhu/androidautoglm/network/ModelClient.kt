@@ -139,7 +139,14 @@ class ModelClient(
             } else {
                 val errorBody = response.errorBody()?.string()
                 Log.e("AutoGLM_Debug", "Gemini API Error: $errorBody")
-                return "Error: ${response.code()} $errorBody"
+                val errorMessage = try {
+                    val json = org.json.JSONObject(errorBody ?: "")
+                    val errorObj = json.optJSONObject("error")
+                    errorObj?.optString("message") ?: errorBody
+                } catch (e: Exception) {
+                    errorBody
+                }
+                return "Error: ${response.code()} $errorMessage"
             }
         } catch (e: Exception) {
             Log.e("AutoGLM_Debug", "Gemini API Exception", e)
@@ -160,13 +167,30 @@ class ModelClient(
             return "Error: OpenAI API not initialized"
         }
         
-        // Prepare messages
-        val messages = mutableListOf<Message>()
-        // ... (Logic continues as before, but using `history` directly)
+        // DeepSeek API (and some others) might not support image_url or the array content format.
+        // Specifically, the error "unknown variant image_url, expected text" implies the API expects a simple string content.
+        val isDeepSeek = modelName.contains("deepseek", ignoreCase = true) || baseUrl.contains("deepseek", ignoreCase = true)
+        
+        val finalMessages = if (isDeepSeek) {
+             Log.w("AutoGLM_Debug", "DeepSeek detected, stripping images from request to avoid API error.")
+             history.map { msg ->
+                if (msg.content is List<*>) {
+                    val textContent = (msg.content as List<*>)
+                        .filterIsInstance<ContentItem>()
+                        .filter { it.type == "text" }
+                        .joinToString("\n") { it.text ?: "" }
+                    Message(msg.role, textContent)
+                } else {
+                    msg
+                }
+            }
+        } else {
+            history
+        }
         
         val request = ChatRequest(
             model = modelName,
-            messages = history,
+            messages = finalMessages,
             maxTokens = 3000
         )
         
@@ -177,7 +201,14 @@ class ModelClient(
             } else {
                 val errorBody = response.errorBody()?.string()
                 Log.e("ModelClient", "API Error: $errorBody")
-                return "Error: ${response.code()} $errorBody"
+                val errorMessage = try {
+                    val json = org.json.JSONObject(errorBody ?: "")
+                    val errorObj = json.optJSONObject("error")
+                    errorObj?.optString("message") ?: errorBody
+                } catch (e: Exception) {
+                    errorBody
+                }
+                return "Error: ${response.code()} $errorMessage"
             }
         } catch (e: Exception) {
             Log.e("ModelClient", "Exception", e)
