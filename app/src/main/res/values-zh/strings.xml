@@ -25,6 +25,8 @@
     <string name="base_url_label">Base URL</string>
     <string name="enter_base_url">填入 Base URL</string>
     <string name="base_url_placeholder">https://open.bigmodel.cn/api/paas/v4</string>
+    <string name="base_url_hint_gemini">示例: https://generativelanguage.googleapis.com</string>
+    <string name="base_url_hint_openai">示例: https://api.deepseek.com 或 https://api.deepseek.com/v1 (请勿包含 /chat/completions)</string>
     <string name="model_name_label">模型名称</string>
     <string name="enter_model_name">填入模型名称</string>
     <string name="model_name_placeholder">autoglm-phone</string>

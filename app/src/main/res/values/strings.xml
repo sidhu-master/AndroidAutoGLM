@@ -25,6 +25,8 @@
     <string name="base_url_label">Base URL</string>
     <string name="enter_base_url">Enter Base URL</string>
     <string name="base_url_placeholder">https://open.bigmodel.cn/api/paas/v4</string>
+    <string name="base_url_hint_gemini">Example: https://generativelanguage.googleapis.com</string>
+    <string name="base_url_hint_openai">Example: https://api.deepseek.com or https://api.deepseek.com/v1 (Do not include /chat/completions)</string>
     <string name="model_name_label">Model Name</string>
     <string name="enter_model_name">Enter Model Name</string>
     <string name="model_name_placeholder">autoglm-phone</string>

@@ -258,8 +258,8 @@ fun SettingsScreen(
                             placeholder = { Text(stringResource(R.string.base_url_placeholder)) },
                             supportingText = {
                                 Text(
-                                    text = if (newIsGemini) "示例: https://generativelanguage.googleapis.com" 
-                                           else "示例: https://api.deepseek.com 或 https://api.deepseek.com/v1 (请勿包含 /chat/completions)",
+                                    text = if (newIsGemini) stringResource(R.string.base_url_hint_gemini) 
+                                           else stringResource(R.string.base_url_hint_openai),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
