@@ -1,13 +1,13 @@
 package com.sidhu.androidautoglm.action
 
 import android.content.Intent
-import android.os.Bundle
 import android.util.Log
-import android.view.accessibility.AccessibilityNodeInfo
 import com.sidhu.androidautoglm.AutoGLMService
 import kotlinx.coroutines.delay
 
 class ActionExecutor(private val service: AutoGLMService) {
+
+    private val textInputHandler = TextInputHandler(service)
 
     suspend fun execute(action: Action): Boolean {
         return when (action) {
@@ -43,19 +43,7 @@ class ActionExecutor(private val service: AutoGLMService) {
             }
             is Action.Type -> {
                 Log.d("ActionExecutor", "Typing ${action.text}")
-                // Simple implementation: try to find focused node or just set text on the first editable node
-                val root = service.rootInActiveWindow
-                val editableNode = findEditableNode(root)
-                if (editableNode != null) {
-                    val arguments = Bundle()
-                    arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, action.text)
-                    val success = editableNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
-                    delay(500)
-                    success
-                } else {
-                    Log.e("ActionExecutor", "No editable node found")
-                    false
-                }
+                textInputHandler.inputText(action.text)
             }
             is Action.Launch -> {
                 Log.d("ActionExecutor", "Launching ${action.appName}")
@@ -110,17 +98,5 @@ class ActionExecutor(private val service: AutoGLMService) {
             }
             Action.Unknown -> false
         }
-    }
-
-    private fun findEditableNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
-        if (node == null) return null
-        if (node.isEditable) return node
-        
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i)
-            val result = findEditableNode(child)
-            if (result != null) return result
-        }
-        return null
     }
 }
