@@ -46,6 +46,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val requestPermissionLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            // Permission granted, maybe move task to back or show success
+            android.widget.Toast.makeText(this, "Microphone permission granted", android.widget.Toast.LENGTH_SHORT).show()
+            // Optional: immediately hide activity if it was just for permission?
+            // moveTaskToBack(true) // User might want to stay in app, let them decide or just let standard lifecycle handle it
+        } else {
+            android.widget.Toast.makeText(this, "Microphone permission denied", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Apply saved locale before super.onCreate
         val prefs = getSharedPreferences("app_settings", MODE_PRIVATE)
@@ -56,6 +69,8 @@ class MainActivity : ComponentActivity() {
         resources.updateConfiguration(config, resources.displayMetrics)
 
         super.onCreate(savedInstanceState)
+        
+        handleIntent(intent)
         
         // Register Broadcast Receiver for background voice commands
         val filter = android.content.IntentFilter("com.sidhu.androidautoglm.ACTION_VOICE_COMMAND_BROADCAST")
@@ -169,6 +184,27 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        // Handle Floating Window Visibility based on App Lifecycle
+        lifecycle.addObserver(androidx.lifecycle.LifecycleEventObserver { _, event ->
+            val service = AutoGLMService.getInstance()
+            if (service != null) {
+                when (event) {
+                    androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                        // App is visible, hide floating window
+                        service.hideFloatingWindow()
+                    }
+                    androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
+                        // App is backgrounded, show floating window
+                        // Pass stopTask callback to ensure functionality is retained if task is running
+                        service.showFloatingWindow {
+                            viewModel.stopTask()
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        })
     }
 
     override fun onDestroy() {
@@ -195,6 +231,9 @@ class MainActivity : ComponentActivity() {
                 // Clear the intent action so it doesn't trigger again on rotation/recreation if we were to rely on intent state
                 intent.action = "" 
             }
+        } else if (intent?.action == "ACTION_REQUEST_MIC_PERMISSION") {
+            requestPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+            intent.action = ""
         }
     }
 

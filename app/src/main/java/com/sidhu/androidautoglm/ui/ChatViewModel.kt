@@ -394,8 +394,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     val userContentItems = mutableListOf<ContentItem>()
-                    userContentItems.add(ContentItem("text", text = textPrompt))
+                    // Doubao/OpenAI vision models often prefer Image first, then Text
                     userContentItems.add(ContentItem("image_url", imageUrl = ImageUrl("data:image/png;base64,${ModelClient.bitmapToBase64(screenshot)}")))
+                    userContentItems.add(ContentItem("text", text = textPrompt))
 
                     val userMessage = Message("user", userContentItems)
                     apiHistory.add(userMessage)
@@ -521,7 +522,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(error = msg, isRunning = false, isLoading = false)
         val service = AutoGLMService.getInstance()
         service?.setTaskRunning(false)
-        service?.updateFloatingStatus(getApplication<Application>().getString(R.string.action_error, msg))
+
+        val currentPkg = service?.currentApp?.value
+        val myPkg = getApplication<Application>().packageName
+        if (currentPkg == myPkg) {
+            service?.hideFloatingWindow()
+        } else {
+            service?.updateFloatingStatus(getApplication<Application>().getString(R.string.action_error, msg))
+        }
     }
 
     private fun removeImagesFromHistory() {

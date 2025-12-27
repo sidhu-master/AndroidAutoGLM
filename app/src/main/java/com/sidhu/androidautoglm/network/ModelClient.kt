@@ -31,6 +31,7 @@ class ModelClient(
 
     private val openAiApi: OpenAIApi?
     private val geminiApi: GeminiApi?
+    private val doubaoApi: DoubaoApi?
 
     init {
         // val logging = HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.NONE }
@@ -50,19 +51,30 @@ class ModelClient(
             .addConverterFactory(GsonConverterFactory.create())
             .build()
 
+        val isDoubao = modelName.contains("doubao", ignoreCase = true) || baseUrl.contains("volces.com", ignoreCase = true)
+
         if (isGemini) {
             openAiApi = null
             geminiApi = retrofit.create(GeminiApi::class.java)
+            doubaoApi = null
+        } else if (isDoubao) {
+            openAiApi = null
+            geminiApi = null
+            doubaoApi = retrofit.create(DoubaoApi::class.java)
         } else {
             openAiApi = retrofit.create(OpenAIApi::class.java)
             geminiApi = null
+            doubaoApi = null
         }
     }
 
     suspend fun sendRequest(history: List<Message>, screenshot: Bitmap?): String {
         Log.d("AutoGLM_Debug", "ModelClient.sendRequest called. isGemini: $isGemini")
+        val isDoubao = modelName.contains("doubao", ignoreCase = true) || baseUrl.contains("volces.com", ignoreCase = true)
         return if (isGemini) {
             sendGeminiRequest(history)
+        } else if (isDoubao) {
+            sendDoubaoRequest(history)
         } else {
             sendOpenAIRequest(history)
         }
@@ -164,6 +176,61 @@ class ModelClient(
         }
     }
 
+    private suspend fun sendDoubaoRequest(history: List<Message>): String {
+        Log.d("AutoGLM_Debug", "sendDoubaoRequest called")
+        if (doubaoApi == null) {
+            Log.e("AutoGLM_Debug", "Doubao API not initialized")
+            return "Error: Doubao API not initialized"
+        }
+
+        // Convert Message to DoubaoMessage
+        val doubaoMessages = history.map { msg ->
+            if (msg.content is String) {
+                DoubaoMessage(msg.role, msg.content)
+            } else {
+                @Suppress("UNCHECKED_CAST")
+                val contentList = msg.content as List<ContentItem>
+                val doubaoContentList = contentList.map { item ->
+                    if (item.type == "text") {
+                        DoubaoContentItem(type = "text", text = item.text)
+                    } else {
+                        DoubaoContentItem(type = "image_url", imageUrl = DoubaoImageUrl(item.imageUrl?.url ?: ""))
+                    }
+                }
+                DoubaoMessage(msg.role, doubaoContentList)
+            }
+        }
+
+        val request = DoubaoRequest(
+            model = modelName,
+            messages = doubaoMessages,
+            maxCompletionTokens = 65535, // Increased to match user example
+            stream = false,
+            reasoningEffort = "medium" // Added per user example
+        )
+
+        try {
+            val response = doubaoApi.chatCompletion("Bearer $apiKey", request)
+            if (response.isSuccessful) {
+                return response.body()?.choices?.firstOrNull()?.message?.content ?: ""
+            } else {
+                val errorBody = response.errorBody()?.string()
+                Log.e("AutoGLM_Debug", "Doubao API Error: $errorBody")
+                val errorMessage = try {
+                    val json = org.json.JSONObject(errorBody ?: "")
+                    val errorObj = json.optJSONObject("error")
+                    errorObj?.optString("message") ?: errorBody
+                } catch (e: Exception) {
+                    errorBody
+                }
+                return "Error: ${response.code()} $errorMessage"
+            }
+        } catch (e: Exception) {
+            Log.e("AutoGLM_Debug", "Doubao API Exception", e)
+            return "Error: ${e.message}"
+        }
+    }
+
     private suspend fun sendOpenAIRequest(history: List<Message>): String {
         Log.d("AutoGLM_Debug", "sendOpenAIRequest called")
         if (openAiApi == null) {
@@ -195,7 +262,10 @@ class ModelClient(
         val request = ChatRequest(
             model = modelName,
             messages = finalMessages,
-            maxTokens = 3000
+            maxTokens = 3000,
+            temperature = 0.0,
+            topP = 0.85,
+            frequencyPenalty = 0.2
         )
         
         try {
@@ -294,10 +364,30 @@ class ModelClient(
 """
 
         fun bitmapToBase64(bitmap: Bitmap): String {
+            // 1. Resize if too large (max dimension 1024) to avoid server 500 errors
+            val maxDimension = 1024
+            val scale = if (bitmap.width > maxDimension || bitmap.height > maxDimension) {
+                val ratio = maxDimension.toFloat() / maxOf(bitmap.width, bitmap.height)
+                ratio
+            } else {
+                1.0f
+            }
+            
+            val finalBitmap = if (scale < 1.0f) {
+                val newWidth = (bitmap.width * scale).toInt()
+                val newHeight = (bitmap.height * scale).toInt()
+                Log.d("AutoGLM_Debug", "Resizing image from ${bitmap.width}x${bitmap.height} to ${newWidth}x${newHeight}")
+                Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+            } else {
+                bitmap
+            }
+
             val outputStream = ByteArrayOutputStream()
-            // Use PNG to avoid compression artifacts, matching Python's logic
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-            return Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
+            // Switch to JPEG with 70% quality to reduce payload size and avoid 500 errors
+            finalBitmap.compress(Bitmap.CompressFormat.JPEG, 70, outputStream)
+            val bytes = outputStream.toByteArray()
+            Log.d("AutoGLM_Debug", "Image Base64 size: ${bytes.size / 1024} KB")
+            return Base64.encodeToString(bytes, Base64.NO_WRAP)
         }
     }
 }

@@ -531,9 +531,12 @@ fun FloatingWindowContent(
                                         detectTapGestures(
                                             onTap = {
                                                 if (modelState is SherpaModelManager.ModelState.NotInitialized || modelState is SherpaModelManager.ModelState.Error) {
+                                                    Toast.makeText(context, "Initializing Voice Model...", Toast.LENGTH_SHORT).show()
                                                     scope.launch {
                                                         SherpaModelManager.initModel(context)
                                                     }
+                                                } else if (modelState is SherpaModelManager.ModelState.Loading) {
+                                                    Toast.makeText(context, "Voice Model Loading...", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         )
@@ -543,6 +546,22 @@ fun FloatingWindowContent(
                                     awaitEachGesture {
                                         val down = awaitFirstDown(requireUnconsumed = false)
                                         
+                                        // Check permission
+                                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                                            Toast.makeText(context, "Requesting Microphone Permission...", Toast.LENGTH_SHORT).show()
+                                            try {
+                                                val intent = Intent(context, com.sidhu.androidautoglm.MainActivity::class.java).apply {
+                                                    action = "ACTION_REQUEST_MIC_PERMISSION"
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                }
+                                                context.startActivity(intent)
+                                            } catch (e: Exception) {
+                                                e.printStackTrace()
+                                                Toast.makeText(context, "Failed to launch app for permission", Toast.LENGTH_SHORT).show()
+                                            }
+                                            return@awaitEachGesture
+                                        }
+
                                         // Start Listening
                                         val startJob = scope.launch(Dispatchers.Main) {
                                             voiceResultText = ""
@@ -554,7 +573,9 @@ fun FloatingWindowContent(
                                             }
                                             speechRecognizerManager.startListening(
                                                 onResultCallback = { result -> voiceResultText = result },
-                                                onErrorCallback = { }
+                                                onErrorCallback = { error -> 
+                                                    Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                                                }
                                             )
                                         }
 

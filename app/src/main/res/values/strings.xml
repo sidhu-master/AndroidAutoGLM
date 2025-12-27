@@ -35,7 +35,11 @@
     <string name="api_type_openai">OpenAI (Zhipu/ChatGPT/DeepSeek/Self-hosted etc.)</string>
     <string name="api_type_openai_title">OpenAI</string>
     <string name="api_type_openai_desc">Supports Zhipu AI, ChatGPT, DeepSeek, and other OpenAI-compatible services</string>
+    <string name="api_type_doubao_title">Doubao</string>
+    <string name="api_type_doubao_desc">Volcengine Doubao (Simplified)</string>
     <string name="api_type_gemini">Google Gemini</string>
+    <string name="base_url_hint_doubao">Example: https://ark.cn-beijing.volces.com/api/v3</string>
+    <string name="model_name_placeholder_doubao">doubao-seed-1-6-251015</string>
     <string name="current_model">Current Model: %1$s</string>
     <string name="cancel">Cancel</string>
     <string name="save">Save</string>

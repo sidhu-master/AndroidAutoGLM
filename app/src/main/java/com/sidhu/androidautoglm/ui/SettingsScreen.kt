@@ -298,7 +298,14 @@ fun SettingsScreen(
 
                         // 1. API Type Selection (Dropdown)
                         var typeExpanded by remember { mutableStateOf(false) }
-                        val currentTypeLabel = if (newIsGemini) stringResource(R.string.api_type_gemini) else stringResource(R.string.api_type_openai_title)
+                        val isDoubao = newBaseUrl.contains("volces.com", ignoreCase = true)
+                        val currentTypeLabel = if (newIsGemini) {
+                            stringResource(R.string.api_type_gemini)
+                        } else if (isDoubao) {
+                            stringResource(R.string.api_type_doubao_title)
+                        } else {
+                            stringResource(R.string.api_type_openai_title)
+                        }
 
                         ExposedDropdownMenuBox(
                             expanded = typeExpanded,
@@ -341,6 +348,20 @@ fun SettingsScreen(
                                     }
                                 )
                                 DropdownMenuItem(
+                                    text = { 
+                                        Text(
+                                            text = stringResource(R.string.api_type_doubao_title),
+                                            style = MaterialTheme.typography.bodyLarge
+                                        )
+                                    },
+                                    onClick = {
+                                        newIsGemini = false
+                                        newBaseUrl = "https://ark.cn-beijing.volces.com/api/v3"
+                                        newModelName = "" // Force user to enter EP
+                                        typeExpanded = false
+                                    }
+                                )
+                                DropdownMenuItem(
                                     text = { Text(stringResource(R.string.api_type_gemini)) },
                                     onClick = {
                                         newIsGemini = true
@@ -371,6 +392,7 @@ fun SettingsScreen(
                             supportingText = {
                                 Text(
                                     text = if (newIsGemini) stringResource(R.string.base_url_hint_gemini) 
+                                           else if (isDoubao) stringResource(R.string.base_url_hint_doubao)
                                            else stringResource(R.string.base_url_hint_openai),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -422,6 +444,49 @@ fun SettingsScreen(
                                     }
                                 }
                             }
+                        } else if (isDoubao) {
+                            var modelExpanded by remember { mutableStateOf(false) }
+                            // Common Doubao models (Proxies) or Hints for Official API
+                            val doubaoModels = listOf(
+                                "doubao-seed-1-6-flash-250828",
+                                "doubao-seed-1-6-lite-251015",
+                                "doubao-seed-1-6-251015",
+                                "doubao-seed-1-8-251215"
+                            )
+
+                            ExposedDropdownMenuBox(
+                                expanded = modelExpanded,
+                                onExpandedChange = { modelExpanded = !modelExpanded }
+                            ) {
+                                OutlinedTextField(
+                                    value = newModelName,
+                                    onValueChange = { newModelName = it },
+                                    label = { Text(stringResource(R.string.enter_model_name)) },
+                                    modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelExpanded) },
+                                    colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                    keyboardActions = KeyboardActions(
+                                        onDone = { keyboardController?.hide() }
+                                    ),
+                                    placeholder = { Text(stringResource(R.string.model_name_placeholder_doubao)) }
+                                )
+
+                                ExposedDropdownMenu(
+                                    expanded = modelExpanded,
+                                    onDismissRequest = { modelExpanded = false }
+                                ) {
+                                    doubaoModels.forEach { model ->
+                                        DropdownMenuItem(
+                                            text = { Text(model) },
+                                            onClick = {
+                                                newModelName = model
+                                                modelExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         } else {
                             OutlinedTextField(
                                 value = newModelName,
@@ -433,7 +498,12 @@ fun SettingsScreen(
                                 keyboardActions = KeyboardActions(
                                     onDone = { keyboardController?.hide() }
                                 ),
-                                placeholder = { Text(stringResource(R.string.model_name_placeholder)) }
+                                placeholder = { 
+                                    Text(
+                                        if (isDoubao) stringResource(R.string.model_name_placeholder_doubao)
+                                        else stringResource(R.string.model_name_placeholder) 
+                                    ) 
+                                }
                             )
                         }
 
