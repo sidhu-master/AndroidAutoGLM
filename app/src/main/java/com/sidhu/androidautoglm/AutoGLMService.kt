@@ -56,13 +56,29 @@ class AutoGLMService : AccessibilityService() {
     /**
      * Shows the floating window. Creates the controller if needed.
      * @param onStop Optional callback when stop button is clicked
+     * @param isRunning Whether the task is currently running (affects UI display)
      */
-    fun showFloatingWindow(onStop: () -> Unit) {
+    fun showFloatingWindow(onStop: () -> Unit, isRunning: Boolean = true) {
         Handler(Looper.getMainLooper()).post {
             if (floatingWindowController == null) {
                 floatingWindowController = FloatingWindowController(this)
             }
-            floatingWindowController?.show(onStop)
+            Log.d("AutoGLMService", "showFloatingWindow called with isRunning=$isRunning")
+            floatingWindowController?.show(onStop, isRunning)
+        }
+    }
+
+    /**
+     * Resets the floating window dismissed state for a new task.
+     * Should be called when a new task starts.
+     */
+    fun resetFloatingWindowForNewTask() {
+        Handler(Looper.getMainLooper()).post {
+            if (floatingWindowController == null) {
+                floatingWindowController = FloatingWindowController(this)
+            }
+            floatingWindowController?.resetForNewTask()
+            Log.d("AutoGLMService", "Reset floating window for new task")
         }
     }
 
@@ -73,6 +89,16 @@ class AutoGLMService : AccessibilityService() {
     fun hideFloatingWindow() {
         Handler(Looper.getMainLooper()).post {
             floatingWindowController?.hide()
+        }
+    }
+
+    /**
+     * Dismisses the floating window and marks it as user-dismissed.
+     * The window will not auto-show on app background until resetFloatingWindowForNewTask() is called.
+     */
+    fun dismissFloatingWindow() {
+        Handler(Looper.getMainLooper()).post {
+            floatingWindowController?.dismiss()
         }
     }
 

@@ -327,11 +327,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val maxSteps = 20
             
             if (!DEBUG_MODE && service != null) {
+                // Reset floating window state for new task
+                service.resetFloatingWindowForNewTask()
+
                 // Show floating window and minimize app
                 withContext(Dispatchers.Main) {
-                    service.showFloatingWindow {
-                        stopTask()
-                    }
+                    service.showFloatingWindow(
+                        onStop = { stopTask() },
+                        isRunning = true
+                    )
                     service.setTaskRunning(true)
                     
                     // Only go home (minimize) if we are currently in the app

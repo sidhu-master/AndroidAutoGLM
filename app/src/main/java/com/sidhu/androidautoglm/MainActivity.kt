@@ -196,10 +196,13 @@ class MainActivity : ComponentActivity() {
                     }
                     androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
                         // App is backgrounded, show floating window
-                        // Pass stopTask callback to ensure functionality is retained if task is running
-                        service.showFloatingWindow {
-                            viewModel.stopTask()
-                        }
+                        // Note: If user has dismissed the window via "Return to App" button,
+                        // the controller will be null and a new one won't be created
+                        // until a new task starts (with forceCreate=true)
+                        service.showFloatingWindow(
+                            onStop = { viewModel.stopTask() },
+                            isRunning = viewModel.uiState.value.isRunning
+                        )
                     }
                     else -> {}
                 }
