@@ -34,6 +34,9 @@ class AutoGLMService : AccessibilityService() {
     
     private val _currentApp = MutableStateFlow<String?>(null)
     val currentApp = _currentApp.asStateFlow()
+
+    private val _isTaskRunning = MutableStateFlow(false)
+    val isTaskRunning = _isTaskRunning.asStateFlow()
     
     private var floatingWindowController: FloatingWindowController? = null
 
@@ -136,6 +139,7 @@ class AutoGLMService : AccessibilityService() {
     }
 
     fun setTaskRunning(running: Boolean) {
+        _isTaskRunning.value = running
         Handler(Looper.getMainLooper()).post {
             floatingWindowController?.setTaskRunning(running)
         }

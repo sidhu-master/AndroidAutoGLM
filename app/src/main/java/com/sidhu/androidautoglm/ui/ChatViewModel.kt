@@ -281,18 +281,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Create a new Job for this task - allows cancellation via stopTask()
         currentTaskJob = kotlinx.coroutines.Job()
 
+        _uiState.value = _uiState.value.copy(
+            messages = _uiState.value.messages + UiMessage("user", text),
+            isLoading = true,
+            isRunning = true,
+            error = null
+        )
+
+        if (!DEBUG_MODE) {
+            AutoGLMService.getInstance()?.setTaskRunning(true)
+        }
+
         viewModelScope.launch(Dispatchers.IO + currentTaskJob!!) {
             Log.d("AutoGLM_Debug", "Coroutine started")
 
             // Refresh app mapping before each request
             AppMapper.refreshInstalledApps()
-
-            _uiState.value = _uiState.value.copy(
-                messages = _uiState.value.messages + UiMessage("user", text),
-                isLoading = true,
-                isRunning = true,
-                error = null
-            )
 
             // Check for continuation
             val isContinuation = isContinueCommand && apiHistory.isNotEmpty()
@@ -461,7 +465,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     if (action is Action.Finish) {
                         isFinished = true
                         _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
-                        service?.setTaskRunning(false)
                         service?.updateFloatingStatus(getApplication<Application>().getString(R.string.action_finish))
                         break
                     }
@@ -484,18 +487,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     isLoading = false,
                     error = null  // Explicitly clear any error
                 )
-                service?.setTaskRunning(false)
                 service?.updateFloatingStatus(getApplication<Application>().getString(R.string.status_stopped))
             } catch (e: Exception) {
                 e.printStackTrace()
                 Log.e("AutoGLM_Debug", "Exception in sendMessage loop: ${e.message}", e)
                 postError(getApplication<Application>().getString(R.string.error_runtime_exception, e.message))
+            } finally {
+                withContext(Dispatchers.Main) {
+                    val service = AutoGLMService.getInstance()
+                    service?.setTaskRunning(false)
+                    
+                    if (!isFinished && !isActive && _uiState.value.error == null) {
+                         _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
+                    }
+                }
             }
 
             if (!isFinished && isActive) {
                 _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
                 if (!DEBUG_MODE) {
-                    service?.setTaskRunning(false)
                     if (step >= maxSteps) {
                         service?.updateFloatingStatus(getApplication<Application>().getString(R.string.error_task_terminated_max_steps))
                     }

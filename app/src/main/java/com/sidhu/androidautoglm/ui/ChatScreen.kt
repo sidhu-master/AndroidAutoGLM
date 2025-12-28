@@ -116,6 +116,12 @@ fun ChatScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val listState = rememberLazyListState()
 
+    LaunchedEffect(uiState.messages.size) {
+        if (uiState.messages.isNotEmpty()) {
+            listState.animateScrollToItem(uiState.messages.size - 1)
+        }
+    }
+
     // Speech Recognition
     val speechRecognizerManager = remember { SpeechRecognizerManager(context) }
     val isListening by speechRecognizerManager.isListening.collectAsState()

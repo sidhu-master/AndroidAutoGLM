@@ -201,7 +201,7 @@ class MainActivity : ComponentActivity() {
                         // until a new task starts (with forceCreate=true)
                         service.showFloatingWindow(
                             onStop = { viewModel.stopTask() },
-                            isRunning = viewModel.uiState.value.isRunning
+                            isRunning = service.isTaskRunning.value
                         )
                     }
                     else -> {}

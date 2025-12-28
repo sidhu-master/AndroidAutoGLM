@@ -117,7 +117,7 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
     val stateFlow: StateFlow<FloatingWindowState> = _stateFlow.asStateFlow()
 
     // Coroutine scope for managing async operations
-    private val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     init {
         _statusText = context.getString(R.string.fw_ready)
@@ -199,7 +199,6 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
      * This prevents the window from auto-showing on app background until resetForNewTask() is called.
      */
     fun dismiss() {
-        // Launch in controllerScope since setState is a suspend function
         controllerScope.launch {
             Log.d("FloatingWindow", "dismiss() called")
             setState(FloatingWindowState.Dismissed)
