@@ -35,7 +35,11 @@
     <string name="api_type_openai">OpenAI (智谱/ChatGPT/DeepSeek/自建服务器等)</string>
     <string name="api_type_openai_title">OpenAI</string>
     <string name="api_type_openai_desc">支持智谱AI、ChatGPT、DeepSeek 以及其他兼容 OpenAI 接口的模型服务</string>
+    <string name="api_type_doubao_title">豆包</string>
+    <string name="api_type_doubao_desc">火山引擎豆包 (简版)</string>
     <string name="api_type_gemini">Google Gemini</string>
+    <string name="base_url_hint_doubao">示例: https://ark.cn-beijing.volces.com/api/v3</string>
+    <string name="model_name_placeholder_doubao">doubao-seed-1-6-251015</string>
     <string name="current_model">当前模型: %1$s</string>
     <string name="cancel">取消</string>
     <string name="save">保存</string>
@@ -119,4 +123,53 @@
     <string name="check_update_error">检查失败: %1$s</string>
     <string name="version_title">当前版本</string>
     <string name="new_version_badge">新版本</string>
+
+    <!-- Conversation List -->
+    <string name="conversation_list_title">会话列表</string>
+    <string name="new_conversation">新对话</string>
+    <string name="empty_conversations_title">还没有对话</string>
+    <string name="empty_conversations_hint">点击 + 号开始新对话</string>
+    <string name="rename_conversation">重命名会话</string>
+    <string name="delete_conversation">删除会话</string>
+    <string name="delete_conversation_message">确定要删除会话\"%1$s\"吗？此操作无法撤销。</string>
+    <string name="conversation_title_hint">会话标题</string>
+    <string name="conversation_title_empty_error">标题不能为空</string>
+    <string name="task_state_completed">已完成</string>
+    <string name="task_state_max_steps">达到最大步数</string>
+    <string name="task_state_user_stopped">已暂停</string>
+    <string name="task_state_error">出错</string>
+
+    <!-- Task Execution Locking -->
+    <string name="error_task_running_switch">任务执行期间禁止切换会话</string>
+    <string name="error_task_running_create">任务执行期间禁止创建新会话</string>
+    <string name="error_task_running_delete">任务执行期间禁止删除会话</string>
+    <string name="error_task_running_operation">任务执行期间禁止此操作</string>
+    <string name="task_continue_prompt_max_steps">任务达到最大步数，是否继续？</string>
+    <string name="task_continue_prompt_user_stopped">任务已暂停，是否继续？</string>
+    <string name="task_completed_message">该任务已完成，可以开始新任务</string>
+    <string name="continue_task">继续</string>
+
+    <!-- Additional Localization Strings -->
+    <string name="step_count_label">步骤: </string>
+    <string name="view_image_button">查看图片</string>
+    <string name="delete_current_conversation_title">删除会话</string>
+    <string name="delete_current_conversation_message">确定要删除当前会话吗？此操作无法撤销。</string>
+    <string name="start_new_conversation_hint">点击此处开始新对话</string>
+    <string name="clear_all_conversations">清空所有会话</string>
+    <string name="clear_all_conversations_title">清空所有会话</string>
+    <string name="clear_all_conversations_message">确定要删除所有会话吗？此操作无法撤销。</string>
+    <string name="language_chinese_option">中文</string>
+    <string name="language_english_option">English</string>
+    <string name="switch_language_cd">切换语言</string>
+    <string name="screenshot_cd">截图</string>
+    <string name="view_image_cd">查看图片</string>
+    <string name="close_cd">关闭</string>
+    <string name="fullscreen_screenshot_cd">全屏截图</string>
+    <string name="microphone_permission_granted_toast">麦克风权限已授予</string>
+    <string name="microphone_permission_denied_toast">麦克风权限被拒绝</string>
+    <string name="voice_model_initializing_toast">正在初始化语音模型...</string>
+    <string name="voice_model_loading_toast">语音模型加载中...</string>
+    <string name="requesting_microphone_permission_toast">正在请求麦克风权限...</string>
+    <string name="failed_launch_permission_toast">启动应用获取权限失败</string>
+    <string name="no_messages_to_continue_error">没有可继续的消息记录</string>
 </resources>

@@ -739,12 +739,12 @@ fun FloatingWindowContent(
                                         detectTapGestures(
                                             onTap = {
                                                 if (modelState is SherpaModelManager.ModelState.NotInitialized || modelState is SherpaModelManager.ModelState.Error) {
-                                                    Toast.makeText(context, "Initializing Voice Model...", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, context.getString(R.string.voice_model_initializing_toast), Toast.LENGTH_SHORT).show()
                                                     scope.launch {
                                                         SherpaModelManager.initModel(context)
                                                     }
                                                 } else if (modelState is SherpaModelManager.ModelState.Loading) {
-                                                    Toast.makeText(context, "Voice Model Loading...", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, context.getString(R.string.voice_model_loading_toast), Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         )
@@ -756,7 +756,7 @@ fun FloatingWindowContent(
                                         
                                         // Check permission
                                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                                            Toast.makeText(context, "Requesting Microphone Permission...", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(R.string.requesting_microphone_permission_toast), Toast.LENGTH_SHORT).show()
                                             try {
                                                 val intent = Intent(context, com.sidhu.androidautoglm.MainActivity::class.java).apply {
                                                     action = "ACTION_REQUEST_MIC_PERMISSION"
@@ -765,7 +765,7 @@ fun FloatingWindowContent(
                                                 context.startActivity(intent)
                                             } catch (e: Exception) {
                                                 e.printStackTrace()
-                                                Toast.makeText(context, "Failed to launch app for permission", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, context.getString(R.string.failed_launch_permission_toast), Toast.LENGTH_SHORT).show()
                                             }
                                             return@awaitEachGesture
                                         }

@@ -18,6 +18,9 @@ import com.sidhu.androidautoglm.ui.ChatViewModel
 import com.sidhu.androidautoglm.ui.SettingsScreen
 import com.sidhu.androidautoglm.ui.MarkdownViewerScreen
 import com.sidhu.androidautoglm.ui.WebViewScreen
+import com.sidhu.androidautoglm.ui.ConversationListScreen
+import com.sidhu.androidautoglm.ui.ConversationListViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sidhu.androidautoglm.network.UpdateInfo
 import com.sidhu.androidautoglm.utils.UpdateManager
 import android.content.Intent
@@ -51,11 +54,11 @@ class MainActivity : ComponentActivity() {
     ) { isGranted: Boolean ->
         if (isGranted) {
             // Permission granted, maybe move task to back or show success
-            android.widget.Toast.makeText(this, "Microphone permission granted", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(this, getString(R.string.microphone_permission_granted_toast), android.widget.Toast.LENGTH_SHORT).show()
             // Optional: immediately hide activity if it was just for permission?
             // moveTaskToBack(true) // User might want to stay in app, let them decide or just let standard lifecycle handle it
         } else {
-            android.widget.Toast.makeText(this, "Microphone permission denied", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(this, getString(R.string.microphone_permission_denied_toast), android.widget.Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -102,7 +105,23 @@ class MainActivity : ComponentActivity() {
                         composable("chat") {
                             ChatScreen(
                                 viewModel = viewModel,
-                                onOpenSettings = { navController.navigate("settings") }
+                                onOpenSettings = { navController.navigate("settings") },
+                                onOpenConversationList = { navController.navigate("conversation_list") }
+                            )
+                        }
+                        composable("conversation_list") {
+                            val conversationListViewModel: ConversationListViewModel = viewModel()
+                            ConversationListScreen(
+                                onConversationSelected = { conversationId ->
+                                    viewModel.loadConversation(conversationId)
+                                    navController.popBackStack()
+                                },
+                                onNewConversation = {
+                                    viewModel.createNewConversation()
+                                    navController.popBackStack()
+                                },
+                                onBack = { navController.popBackStack() },
+                                viewModel = conversationListViewModel
                             )
                         }
                         composable("settings") {
@@ -193,6 +212,7 @@ class MainActivity : ComponentActivity() {
                     androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
                         // App is visible, hide floating window
                         service.hideFloatingWindow()
+                        // Messages are automatically updated via reactive Flow when database changes
                     }
                     androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
                         // App is backgrounded, show floating window

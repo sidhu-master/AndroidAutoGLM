@@ -123,4 +123,53 @@
     <string name="battery_optimization_desc_on">Ignored (Service stays alive in background)</string>
     <string name="battery_optimization_desc_off">Enabled (System may kill service)</string>
     <string name="battery_optimization_allow">Allow Background Run</string>
+
+    <!-- Conversation List -->
+    <string name="conversation_list_title">Conversation List</string>
+    <string name="new_conversation">New Conversation</string>
+    <string name="empty_conversations_title">No conversations yet</string>
+    <string name="empty_conversations_hint">Tap + to start a new conversation</string>
+    <string name="rename_conversation">Rename Conversation</string>
+    <string name="delete_conversation">Delete Conversation</string>
+    <string name="delete_conversation_message">Are you sure you want to delete conversation \"%1$s\"? This cannot be undone.</string>
+    <string name="conversation_title_hint">Conversation Title</string>
+    <string name="conversation_title_empty_error">Title cannot be empty</string>
+    <string name="task_state_completed">Completed</string>
+    <string name="task_state_max_steps">Max Steps Reached</string>
+    <string name="task_state_user_stopped">Paused</string>
+    <string name="task_state_error">Error</string>
+
+    <!-- Task Execution Locking -->
+    <string name="error_task_running_switch">Cannot switch conversation during task execution</string>
+    <string name="error_task_running_create">Cannot create new conversation during task execution</string>
+    <string name="error_task_running_delete">Cannot delete conversation during task execution</string>
+    <string name="error_task_running_operation">Operation not allowed during task execution</string>
+    <string name="task_continue_prompt_max_steps">Task reached max steps, continue?</string>
+    <string name="task_continue_prompt_user_stopped">Task paused, continue?</string>
+    <string name="task_completed_message">This task is completed, you can start a new task</string>
+    <string name="continue_task">Continue</string>
+
+    <!-- Additional Localization Strings -->
+    <string name="step_count_label">Steps: </string>
+    <string name="view_image_button">View Image</string>
+    <string name="delete_current_conversation_title">Delete Conversation</string>
+    <string name="delete_current_conversation_message">Are you sure you want to delete the current conversation? This cannot be undone.</string>
+    <string name="start_new_conversation_hint">Tap here to start a new conversation</string>
+    <string name="clear_all_conversations">Clear All Conversations</string>
+    <string name="clear_all_conversations_title">Clear All Conversations</string>
+    <string name="clear_all_conversations_message">Are you sure you want to delete all conversations? This cannot be undone.</string>
+    <string name="language_chinese_option">中文</string>
+    <string name="language_english_option">English</string>
+    <string name="switch_language_cd">Switch Language</string>
+    <string name="screenshot_cd">Screenshot</string>
+    <string name="view_image_cd">View Image</string>
+    <string name="close_cd">Close</string>
+    <string name="fullscreen_screenshot_cd">Fullscreen Screenshot</string>
+    <string name="microphone_permission_granted_toast">Microphone permission granted</string>
+    <string name="microphone_permission_denied_toast">Microphone permission denied</string>
+    <string name="voice_model_initializing_toast">Initializing Voice Model...</string>
+    <string name="voice_model_loading_toast">Voice Model Loading...</string>
+    <string name="requesting_microphone_permission_toast">Requesting Microphone Permission...</string>
+    <string name="failed_launch_permission_toast">Failed to launch app for permission</string>
+    <string name="no_messages_to_continue_error">No messages to continue</string>
 </resources>

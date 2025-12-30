@@ -13,17 +13,21 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.activity.compose.BackHandler
 
 import android.net.Uri
 import android.os.Build
@@ -54,6 +58,8 @@ import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import com.sidhu.androidautoglm.ui.util.displayText
+import com.sidhu.androidautoglm.ui.util.displayColor
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.foundation.Image
@@ -103,11 +109,15 @@ fun LanguageSwitchButton(modifier: Modifier = Modifier) {
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onOpenConversationList: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var inputText by remember { mutableStateOf("") }
-    
+
+    // Fullscreen Image State
+    var fullscreenImage by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+
     // Voice Review State
     var showVoiceReview by remember { mutableStateOf(false) }
     var voiceResultText by remember { mutableStateOf("") }
@@ -182,6 +192,11 @@ fun ChatScreen(
         viewModel.checkBatteryOptimization(context)
     }
 
+    // Handle back button press when fullscreen image is shown
+    BackHandler(enabled = fullscreenImage != null) {
+        fullscreenImage = null
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -200,13 +215,15 @@ fun ChatScreen(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable {
-                        scope.launch {
-                            if (listState.firstVisibleItemIndex > 0) {
-                                listState.animateScrollToItem(0)
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable {
+                            scope.launch {
+                                if (listState.firstVisibleItemIndex > 0) {
+                                    listState.animateScrollToItem(0)
+                                }
                             }
                         }
-                    }
                 ) {
                     Image(
                         painter = painterResource(id = R.mipmap.ic_launcher),
@@ -216,43 +233,90 @@ fun ChatScreen(
                             .size(32.dp)
                             .clip(RoundedCornerShape(8.dp))
                     )
-                    Text(
-                        text = stringResource(R.string.chat_title),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color.Black
-                    )
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = uiState.currentConversation?.title ?: stringResource(R.string.chat_title),
+                                style = MaterialTheme.typography.titleLarge,
+                                color = Color.Black,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                            // Task state badge
+                            uiState.currentConversation?.lastTaskState?.let { state ->
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Surface(
+                                    shape = MaterialTheme.shapes.small,
+                                    color = Color(android.graphics.Color.parseColor(state.displayColor()))
+                                ) {
+                                    Text(
+                                        state.displayText(context),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+                        }
+                        // Step count display
+                        if (uiState.currentConversation != null && uiState.currentConversation!!.lastStepCount > 0) {
+                            Text(
+                                text = stringResource(R.string.step_count_label) + uiState.currentConversation!!.lastStepCount,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray
+                            )
+                        }
+                    }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    var showClearDialog by remember { mutableStateOf(false) }
+                    var showDeleteDialog by remember { mutableStateOf(false) }
 
-                    if (showClearDialog) {
+                    if (showDeleteDialog) {
                         AlertDialog(
-                            onDismissRequest = { showClearDialog = false },
-                            title = { Text(stringResource(R.string.clear_chat_title)) },
-                            text = { Text(stringResource(R.string.clear_chat_message)) },
+                            onDismissRequest = { showDeleteDialog = false },
+                            title = { Text(stringResource(R.string.delete_current_conversation_title)) },
+                            text = { Text(stringResource(R.string.delete_current_conversation_message)) },
                             confirmButton = {
                                 TextButton(
                                     onClick = {
-                                        viewModel.clearMessages()
-                                        showClearDialog = false
-                                    }
+                                        uiState.activeConversationId?.let {
+                                            viewModel.deleteConversation(it)
+                                        }
+                                        showDeleteDialog = false
+                                    },
+                                    colors = ButtonDefaults.textButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.error
+                                    )
                                 ) {
-                                    Text(stringResource(R.string.confirm))
+                                    Text(stringResource(R.string.delete_conversation))
                                 }
                             },
                             dismissButton = {
-                                TextButton(onClick = { showClearDialog = false }) {
+                                TextButton(onClick = { showDeleteDialog = false }) {
                                     Text(stringResource(R.string.cancel))
                                 }
                             }
                         )
                     }
 
-                    IconButton(onClick = { showClearDialog = true }) {
+                    IconButton(
+                        onClick = { showDeleteDialog = true },
+                        enabled = !uiState.isTaskRunning
+                    ) {
                         Icon(
                             imageVector = Icons.Default.Delete,
-                            contentDescription = stringResource(R.string.clear_chat),
-                            tint = Color.Gray
+                            contentDescription = stringResource(R.string.delete_current_conversation_title),
+                            tint = if (uiState.isTaskRunning) Color.Gray.copy(alpha = 0.5f) else Color.Gray
+                        )
+                    }
+                    IconButton(
+                        onClick = onOpenConversationList,
+                        enabled = !uiState.isTaskRunning
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.List,
+                            contentDescription = stringResource(R.string.conversation_list_title),
+                            tint = if (uiState.isTaskRunning) Color.Gray.copy(alpha = 0.5f) else Color.Gray
                         )
                     }
                     IconButton(onClick = onOpenSettings) {
@@ -277,7 +341,10 @@ fun ChatScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     items(uiState.messages) { message ->
-                        MessageItem(message)
+                        MessageItem(
+                            message = message,
+                            onShowImage = { bitmap -> fullscreenImage = bitmap }
+                        )
                     }
                 }
 
@@ -440,12 +507,14 @@ fun ChatScreen(
                             onValueChange = { inputText = it },
                             modifier = Modifier
                                 .weight(1f),
+                            enabled = !uiState.isTaskRunning,
                             placeholder = { Text(stringResource(R.string.input_placeholder), color = Color.Gray) },
                             shape = MaterialTheme.shapes.medium,
                             colors = TextFieldDefaults.colors(
                                 focusedContainerColor = Color.White,
                                 unfocusedContainerColor = Color.White,
                                 disabledContainerColor = Color.White,
+                                disabledTextColor = Color.Gray,
                                 focusedIndicatorColor = Color.Transparent,
                                 unfocusedIndicatorColor = Color.Transparent
                             ),
@@ -453,31 +522,57 @@ fun ChatScreen(
                         )
                     }
 
-                    // Send Button
-                    IconButton(
-                        onClick = {
-                            viewModel.sendMessage(inputText)
-                            inputText = ""
-                        },
-                        enabled = !uiState.isLoading && inputText.isNotBlank()
-                    ) {
-                        Surface(
+                    // Send Button / Continue Button
+                    if (uiState.currentConversation?.lastTaskState != null) {
+                        // Continue Task Button
+                        Button(
+                            onClick = { viewModel.continueTask() },
+                            enabled = !uiState.isLoading && !uiState.isRunning && !uiState.isTaskRunning,
+                            modifier = Modifier.size(80.dp, 48.dp),
                             shape = MaterialTheme.shapes.extraLarge,
-                            color = if (!uiState.isLoading && inputText.isNotBlank()) MaterialTheme.colorScheme.primary else Color.Gray,
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Send, 
-                                contentDescription = stringResource(R.string.send_button), 
-                                tint = Color.White,
-                                modifier = Modifier.padding(8.dp)
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (!uiState.isLoading && !uiState.isRunning && !uiState.isTaskRunning)
+                                    MaterialTheme.colorScheme.primary else Color.Gray
                             )
+                        ) {
+                            Text(stringResource(R.string.continue_task), color = Color.White)
+                        }
+                    } else {
+                        // Send Button (normal task)
+                        IconButton(
+                            onClick = {
+                                viewModel.sendMessage(inputText)
+                                inputText = ""
+                            },
+                            enabled = !uiState.isLoading && !uiState.isTaskRunning && inputText.isNotBlank()
+                        ) {
+                            Surface(
+                                shape = MaterialTheme.shapes.extraLarge,
+                                color = if (!uiState.isLoading && inputText.isNotBlank())
+                                    MaterialTheme.colorScheme.primary else Color.Gray,
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Send,
+                                    contentDescription = stringResource(R.string.send_button),
+                                    tint = Color.White,
+                                    modifier = Modifier.padding(8.dp)
+                                )
+                            }
                         }
                     }
                 }
             }
         }
-        
+
+        // Fullscreen Image Overlay (highest priority)
+        if (fullscreenImage != null) {
+            FullscreenImageOverlay(
+                imageBitmap = fullscreenImage!!,
+                onDismiss = { fullscreenImage = null }
+            )
+        }
+
         if (isListening) {
             RecordingIndicator(soundLevel = soundLevel)
         }
@@ -627,12 +722,16 @@ fun ChatScreen(
 }
 
 @Composable
-fun MessageItem(message: UiMessage) {
+fun MessageItem(
+    message: UiMessage,
+    onShowImage: (android.graphics.Bitmap) -> Unit = {}
+) {
     val isUser = message.role == "user"
+    val isAssistant = message.role == "assistant"
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val containerColor = if (isUser) MaterialTheme.colorScheme.primary else Color.White
     val contentColor = if (isUser) MaterialTheme.colorScheme.onPrimary else Color.Black
-    
+
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
 
@@ -667,8 +766,18 @@ fun MessageItem(message: UiMessage) {
                 }
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
-                if (message.image != null) {
-                    // Image display logic if needed
+                // User messages show inline image, assistant messages show button
+                if (isUser && message.image != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = message.image!!.asImageBitmap(),
+                        contentDescription = stringResource(R.string.screenshot_cd),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .clip(MaterialTheme.shapes.medium)
+                            .padding(bottom = 8.dp),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                    )
                 }
                 Text(
                     text = message.content,
@@ -677,5 +786,79 @@ fun MessageItem(message: UiMessage) {
                 )
             }
         }
+
+        // Show "View Image" button for assistant messages with images
+        if (isAssistant && message.image != null) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Button(
+                onClick = { onShowImage(message.image!!) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondary
+                ),
+                modifier = Modifier.padding(start = 8.dp, end = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Image,
+                    contentDescription = stringResource(R.string.view_image_cd),
+                    modifier = Modifier.size(18.dp),
+                    tint = Color.White
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = stringResource(R.string.view_image_button),
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Fullscreen image viewing overlay
+ */
+@Composable
+fun FullscreenImageOverlay(
+    imageBitmap: android.graphics.Bitmap,
+    onDismiss: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) {
+                onDismiss()
+            }
+    ) {
+        // Close button
+        IconButton(
+            onClick = onDismiss,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(16.dp)
+                .background(
+                    color = Color.Black.copy(alpha = 0.5f),
+                    shape = androidx.compose.foundation.shape.CircleShape
+                )
+        ) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = stringResource(R.string.close_cd),
+                tint = Color.White
+            )
+        }
+
+        // Image in center
+        androidx.compose.foundation.Image(
+            bitmap = imageBitmap.asImageBitmap(),
+            contentDescription = stringResource(R.string.fullscreen_screenshot_cd),
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.Center),
+            contentScale = androidx.compose.ui.layout.ContentScale.Fit
+        )
     }
 }

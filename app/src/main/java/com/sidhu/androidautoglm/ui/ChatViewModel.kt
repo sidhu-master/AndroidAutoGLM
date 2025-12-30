@@ -16,6 +16,8 @@ import com.sidhu.androidautoglm.network.Message
 import com.sidhu.androidautoglm.network.ModelClient
 import com.sidhu.androidautoglm.AutoGLMService
 import com.sidhu.androidautoglm.R
+import com.sidhu.androidautoglm.data.TaskEndState
+import com.sidhu.androidautoglm.data.entity.Conversation as DbConversation
 import java.text.SimpleDateFormat
 import java.util.Date
 import android.os.Build
@@ -29,14 +31,28 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.withContext
 
 import android.content.ComponentName
 import android.text.TextUtils
 
 import com.sidhu.androidautoglm.BuildConfig
+import com.sidhu.androidautoglm.data.AppDatabase
+import com.sidhu.androidautoglm.data.ImageStorage
+import com.sidhu.androidautoglm.data.repository.ConversationRepository
+import com.sidhu.androidautoglm.ui.model.toUiMessages
+import com.sidhu.androidautoglm.usecase.ConversationUseCase
 
+/**
+ * Nested state classes for better organization
+ * Each class groups related state properties
+ */
 data class ChatUiState(
     val messages: List<UiMessage> = emptyList(),
     val isLoading: Boolean = false,
@@ -46,7 +62,83 @@ data class ChatUiState(
     val missingOverlayPermission: Boolean = false,
     val missingBatteryExemption: Boolean = false,
     val apiKey: String = "",
-    val baseUrl: String = "https://open.bigmodel.cn/api/paas/v4", // Official ZhipuAI Endpoint
+    val baseUrl: String = "https://open.bigmodel.cn/api/paas/v4",
+    val isGemini: Boolean = false,
+    val modelName: String = "autoglm-phone",
+    val isTaskRunning: Boolean = false,
+    val activeConversationId: Long? = null,
+    val currentConversation: DbConversation? = null
+) {
+    // Convenience properties for grouping related state
+    val taskState: TaskState get() = TaskState(isRunning, isLoading, isTaskRunning, error)
+    val conversationState: ConversationState get() = ConversationState(activeConversationId, currentConversation, messages)
+    val permissionState: PermissionState get() = PermissionState(missingAccessibilityService, missingOverlayPermission, missingBatteryExemption)
+    val settingsState: SettingsState get() = SettingsState(apiKey, baseUrl, isGemini, modelName)
+
+    // Helper methods for updating nested state
+    fun withTaskState(update: TaskState.() -> TaskState): ChatUiState {
+        val newTaskState = taskState.update()
+        return copy(
+            isRunning = newTaskState.isRunning,
+            isLoading = newTaskState.isLoading,
+            isTaskRunning = newTaskState.isTaskRunning,
+            error = newTaskState.error
+        )
+    }
+
+    fun withConversationState(update: ConversationState.() -> ConversationState): ChatUiState {
+        val newConvState = conversationState.update()
+        return copy(
+            activeConversationId = newConvState.activeConversationId,
+            currentConversation = newConvState.currentConversation,
+            messages = newConvState.messages
+        )
+    }
+
+    fun withPermissionState(update: PermissionState.() -> PermissionState): ChatUiState {
+        val newPermState = permissionState.update()
+        return copy(
+            missingAccessibilityService = newPermState.missingAccessibilityService,
+            missingOverlayPermission = newPermState.missingOverlayPermission,
+            missingBatteryExemption = newPermState.missingBatteryExemption
+        )
+    }
+}
+
+/**
+ * Task-related state
+ */
+data class TaskState(
+    val isRunning: Boolean = false,
+    val isLoading: Boolean = false,
+    val isTaskRunning: Boolean = false,
+    val error: String? = null
+)
+
+/**
+ * Conversation-related state
+ */
+data class ConversationState(
+    val activeConversationId: Long? = null,
+    val currentConversation: DbConversation? = null,
+    val messages: List<UiMessage> = emptyList()
+)
+
+/**
+ * Permission-related state
+ */
+data class PermissionState(
+    val missingAccessibilityService: Boolean = false,
+    val missingOverlayPermission: Boolean = false,
+    val missingBatteryExemption: Boolean = false
+)
+
+/**
+ * Settings-related state
+ */
+data class SettingsState(
+    val apiKey: String = "",
+    val baseUrl: String = "https://open.bigmodel.cn/api/paas/v4",
     val isGemini: Boolean = false,
     val modelName: String = "autoglm-phone"
 )
@@ -66,6 +158,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val prefs by lazy {
         getApplication<Application>().getSharedPreferences("app_settings", Context.MODE_PRIVATE)
+    }
+
+    // Conversation management
+    private val database by lazy { AppDatabase.getInstance(getApplication()) }
+    private val imageStorage by lazy {
+        // Pass messageDao to enable orphaned image cleanup on initialization
+        ImageStorage(getApplication(), database.messageDao())
+    }
+    private val repository by lazy {
+        ConversationRepository(
+            conversationDao = database.conversationDao(),
+            messageDao = database.messageDao(),
+            imageStorage = imageStorage
+        )
+    }
+    private val conversationUseCase by lazy { ConversationUseCase(repository, getApplication()) }
+    private val preferencesManager by lazy {
+        com.sidhu.androidautoglm.data.preferences.PreferencesManager(getApplication())
     }
 
     init {
@@ -99,6 +209,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }
+        }
+
+        // Reactive message updates: automatically refresh UI messages when database changes
+        // Using flatMapLatest to automatically cancel previous collection when conversationId changes
+        @OptIn(ExperimentalCoroutinesApi::class)
+        viewModelScope.launch {
+            _uiState.map { it.activeConversationId }
+                .distinctUntilChanged()
+                .flatMapLatest { conversationId ->
+                    if (conversationId != null) {
+                        repository.getMessagesWithImagesFlow(conversationId)
+                            .map { messagesWithImages -> messagesWithImages.toUiMessages() }
+                    } else {
+                        flowOf(emptyList())
+                    }
+                }
+                .collect { messages ->
+                    _uiState.value = _uiState.value.copy(messages = messages)
+                }
+        }
+
+        // Restore last used conversation on startup
+        val lastUsedConversationId = preferencesManager.getLastUsedConversationId()
+        if (lastUsedConversationId != null) {
+            Log.d("ChatViewModel", "Restoring last used conversation: $lastUsedConversationId")
+            loadConversation(lastUsedConversationId)
         }
     }
 
@@ -229,14 +365,35 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun clearMessages() {
         _uiState.value = _uiState.value.copy(messages = emptyList())
         apiHistory.clear()
-        
+
+        // Clear messages from database for current conversation
+        val conversationId = _uiState.value.activeConversationId
+        if (conversationId != null) {
+            viewModelScope.launch {
+                try {
+                    repository.clearMessages(conversationId)
+                } catch (e: Exception) {
+                    Log.e("ChatViewModel", "Failed to clear messages from database", e)
+                }
+            }
+        }
+
         // Add welcome message if needed, or keep empty
         // _uiState.value = _uiState.value.copy(messages = listOf(UiMessage("assistant", getApplication<Application>().getString(R.string.welcome_message))))
     }
 
     fun sendMessage(text: String, isContinueCommand: Boolean = false) {
         Log.d("AutoGLM_Trace", "sendMessage called with text: $text, isContinueCommand: $isContinueCommand")
-        if (text.isBlank()) return
+        // Skip blank check for continue commands
+        if (text.isBlank() && !isContinueCommand) return
+
+        // Ensure we have an active conversation
+        if (_uiState.value.activeConversationId == null) {
+            viewModelScope.launch {
+                val conversationId = conversationUseCase.createConversation()
+                _uiState.value = _uiState.value.copy(activeConversationId = conversationId)
+            }
+        }
 
         if (modelClient == null) {
             Log.d("AutoGLM_Trace", "modelClient is null, initializing...")
@@ -295,12 +452,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO + currentTaskJob!!) {
             Log.d("AutoGLM_Debug", "Coroutine started")
 
+            // Update task running state
+            _uiState.value = _uiState.value.copy(isTaskRunning = true)
+
             // Refresh app mapping before each request
             AppMapper.refreshInstalledApps()
 
+            // Save user message to database when user actively inputs a command
+            // This happens once per user input, not in the loop
+            if (!isContinueCommand && _uiState.value.activeConversationId != null) {
+                try {
+                    repository.saveUserMessage(_uiState.value.activeConversationId!!, text)
+                } catch (e: Exception) {
+                    Log.e("ChatViewModel", "Failed to save user message", e)
+                }
+            }
             // Check for continuation
             val isContinuation = isContinueCommand && apiHistory.isNotEmpty()
-            
+
             if (isContinuation) {
                 Log.d("AutoGLM_Debug", "Continuing conversation with history size: ${apiHistory.size}")
                 // Sanitize history: retain text, remove images from past turns to save tokens/bandwidth
@@ -308,8 +477,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val sanitizedHistory = apiHistory.map { msg ->
                     if (msg.content is List<*>) {
                         @Suppress("UNCHECKED_CAST")
-                        val list = msg.content as List<ContentItem>
-                        val textOnly = list.filter { it.type == "text" }
+                        val list = msg.content as List<*>
+                        // Filter items keeping only text
+                        val textOnly = list.filter { item ->
+                            (item as? com.sidhu.androidautoglm.network.ContentItem)?.type == "text"
+                        }
                         Message(msg.role, textOnly)
                     } else {
                         msg
@@ -409,6 +581,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     val userMessage = Message("user", userContentItems)
                     apiHistory.add(userMessage)
 
+                    // Get conversation ID for database operations
+                    val conversationId = _uiState.value.activeConversationId
+
                     // 3. Call API
                     Log.d("AutoGLM_Debug", "Sending request to ModelClient...")
                     val responseText = modelClient?.sendRequest(apiHistory, screenshot) ?: "Error: Client null"
@@ -433,6 +608,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     // Add Assistant response to history
                     apiHistory.add(Message("assistant", "<think>$thinking</think><answer>$actionStr</answer>"))
                     
+                    // Save assistant message to database with screenshot
+                    if (conversationId != null) {
+                        try {
+                            val assistantContent = """$thinking
+<answer>$actionStr</answer>"""
+                            repository.saveAssistantMessage(conversationId, assistantContent, screenshot)
+                        } catch (e: Exception) {
+                            Log.e("ChatViewModel", "Failed to save assistant message", e)
+                        }
+                    }
+
                     _uiState.value = _uiState.value.copy(
                         messages = _uiState.value.messages + UiMessage("assistant", responseText)
                     )
@@ -466,6 +652,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         isFinished = true
                         _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
                         service?.updateFloatingStatus(getApplication<Application>().getString(R.string.action_finish))
+                        updateTaskState(TaskEndState.COMPLETED, step)
                         break
                     }
 
@@ -488,6 +675,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     error = null  // Explicitly clear any error
                 )
                 service?.updateFloatingStatus(getApplication<Application>().getString(R.string.status_stopped))
+                updateTaskState(TaskEndState.USER_STOPPED, step)
             } catch (e: Exception) {
                 e.printStackTrace()
                 Log.e("AutoGLM_Debug", "Exception in sendMessage loop: ${e.message}", e)
@@ -508,6 +696,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (!DEBUG_MODE) {
                     if (step >= maxSteps) {
                         service?.updateFloatingStatus(getApplication<Application>().getString(R.string.error_task_terminated_max_steps))
+                        updateTaskState(TaskEndState.MAX_STEPS_REACHED, step)
                     }
                 }
             }
@@ -559,15 +748,175 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (lastUserMsg.role == "user" && lastUserMsg.content is List<*>) {
             try {
                 @Suppress("UNCHECKED_CAST")
-                val contentList = lastUserMsg.content as List<ContentItem>
-                // Filter out image items, keep only text
-                val textOnlyList = contentList.filter { it.type == "text" }
-                
+                val contentList = lastUserMsg.content as List<*>
+
+                // Filter items keeping only text
+                val textOnlyList = contentList.filter { item ->
+                    (item as? com.sidhu.androidautoglm.network.ContentItem)?.type == "text"
+                }
+
                 // Replace the message in history with the text-only version
                 apiHistory[lastUserIndex] = lastUserMsg.copy(content = textOnlyList)
                 // Log.d("ChatViewModel", "Removed image from history at index $lastUserIndex")
             } catch (e: Exception) {
                 Log.e("ChatViewModel", "Failed to remove image from history", e)
+            }
+        }
+    }
+
+    // ==================== Conversation Management Methods ====================
+
+    /**
+     * Load a conversation by ID and display its messages.
+     * Messages are automatically updated via reactive Flow when database changes.
+     */
+    fun loadConversation(conversationId: Long) {
+        viewModelScope.launch {
+            try {
+                val conversation = conversationUseCase.loadConversation(conversationId)
+                if (conversation != null) {
+                    // Single state update with all properties
+                    _uiState.value = _uiState.value.copy(
+                        activeConversationId = conversationId,
+                        currentConversation = conversation
+                    )
+
+                    // Save conversation ID to preferences for next startup
+                    preferencesManager.saveCurrentConversationId(conversationId)
+
+                    // Messages will be automatically loaded by the reactive Flow in init block
+                }
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to load conversation", e)
+            }
+        }
+    }
+
+    /**
+     * Create a new conversation
+     */
+    fun createNewConversation() {
+        viewModelScope.launch {
+            try {
+                val conversationId = conversationUseCase.createConversation()
+                _uiState.value = _uiState.value.copy(
+                    activeConversationId = conversationId,
+                    currentConversation = null, // Will be loaded
+                    messages = emptyList()
+                )
+                // Clear API history for fresh conversation
+                apiHistory.clear()
+                // Save conversation ID to preferences
+                preferencesManager.saveCurrentConversationId(conversationId)
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to create conversation", e)
+            }
+        }
+    }
+
+    /**
+     * Delete a conversation
+     */
+    fun deleteConversation(conversationId: Long) {
+        viewModelScope.launch {
+            try {
+                conversationUseCase.deleteConversation(conversationId)
+
+                // If deleted conversation was active, create a new one
+                if (_uiState.value.activeConversationId == conversationId) {
+                    createNewConversation()
+                }
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to delete conversation", e)
+            }
+        }
+    }
+
+    /**
+     * Rename a conversation
+     */
+    fun renameConversation(conversationId: Long, newTitle: String) {
+        viewModelScope.launch {
+            try {
+                conversationUseCase.renameConversation(conversationId, newTitle)
+
+                // Update current conversation if it's the active one
+                if (_uiState.value.activeConversationId == conversationId) {
+                    _uiState.value = _uiState.value.copy(
+                        currentConversation = _uiState.value.currentConversation?.copy(title = newTitle)
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to rename conversation", e)
+            }
+        }
+    }
+
+    /**
+     * Continue a task that was previously stopped or reached max steps
+     */
+    fun continueTask() {
+        viewModelScope.launch {
+            try {
+                val conversationId = _uiState.value.activeConversationId
+                if (conversationId == null) {
+                    Log.e("ChatViewModel", "No active conversation to continue")
+                    return@launch
+                }
+
+                // First, load the conversation to ensure UI shows latest data
+                // This also ensures conversation entity is up to date
+                val conversation = conversationUseCase.loadConversation(conversationId)
+                if (conversation == null) {
+                    Log.e("ChatViewModel", "Conversation not found: $conversationId")
+                    return@launch
+                }
+
+                // Update current conversation info
+                _uiState.value = _uiState.value.copy(currentConversation = conversation)
+
+                // Load conversation history from database
+                val messagesWithImages = conversationUseCase.loadMessages(conversationId)
+
+                if (messagesWithImages.isEmpty()) {
+                    Log.e("ChatViewModel", "No messages to continue in conversation: $conversationId")
+                    postError(getApplication<Application>().getString(R.string.no_messages_to_continue_error))
+                    return@launch
+                }
+
+                // Update UI messages first to ensure consistency
+                _uiState.value = _uiState.value.copy(messages = messagesWithImages.toUiMessages())
+
+                // Rebuild apiHistory from database messages using UseCase
+                apiHistory.clear()
+                apiHistory.addAll(conversationUseCase.rebuildApiHistory(messagesWithImages))
+
+                Log.d("ChatViewModel", "Loaded ${apiHistory.size} messages for continuation")
+
+                // Call sendMessage with continue flag
+                sendMessage("", isContinueCommand = true)
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to continue task", e)
+                postError(getApplication<Application>().getString(R.string.error_runtime_exception, e.message))
+            }
+        }
+    }
+
+    /**
+     * Update task state when a task ends
+     */
+    private fun updateTaskState(state: TaskEndState, stepCount: Int) {
+        val conversationId = _uiState.value.activeConversationId ?: return
+        viewModelScope.launch {
+            try {
+                conversationUseCase.updateTaskState(conversationId, state, stepCount)
+
+                // Update UI state based on new task state
+                _uiState.value = _uiState.value.copy(
+                    isTaskRunning = false
+                )
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to update task state", e)
             }
         }
     }

@@ -67,7 +67,7 @@ fun MarkdownViewerScreen(
                     IconButton(onClick = { showLanguageMenu = true }) {
                         Icon(
                             imageVector = Icons.Default.Translate,
-                            contentDescription = "Switch Language"
+                            contentDescription = stringResource(R.string.switch_language_cd)
                         )
                     }
                     DropdownMenu(
@@ -75,17 +75,17 @@ fun MarkdownViewerScreen(
                         onDismissRequest = { showLanguageMenu = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("中文") },
-                            onClick = { 
+                            text = { Text(stringResource(R.string.language_chinese_option)) },
+                            onClick = {
                                 currentLanguage = "zh"
-                                showLanguageMenu = false 
+                                showLanguageMenu = false
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("English") },
-                            onClick = { 
+                            text = { Text(stringResource(R.string.language_english_option)) },
+                            onClick = {
                                 currentLanguage = "en"
-                                showLanguageMenu = false 
+                                showLanguageMenu = false
                             }
                         )
                     }
