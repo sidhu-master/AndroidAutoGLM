@@ -1,23 +1,12 @@
 package com.sidhu.androidautoglm
 
 import android.content.Context
-import android.graphics.PixelFormat
-import android.os.Build
-import android.util.Log
-import android.view.Gravity
-import android.view.WindowManager
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.OpenInNew
 import android.content.Intent
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import android.util.Log
+import android.view.Choreographer
+import android.view.View
+import android.view.WindowManager
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -31,60 +20,90 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.IntOffset
-import kotlin.math.roundToInt
-
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import com.sidhu.androidautoglm.utils.SpeechRecognizerManager
-import com.sidhu.androidautoglm.utils.SherpaModelManager
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.suspendCancellableCoroutine
+import android.os.Handler
+import android.os.Looper
+import kotlin.math.roundToInt
+import kotlin.coroutines.resume
+
+import com.sidhu.androidautoglm.utils.DisplayUtils
+import com.sidhu.androidautoglm.ui.floating.FloatingWindowContent
 import com.sidhu.androidautoglm.ui.RecordingIndicator
 import com.sidhu.androidautoglm.ui.VoiceReviewOverlay
-import android.os.VibrationEffect
-import android.os.Looper
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import android.os.Vibrator
-import android.os.VibratorManager
-import androidx.compose.foundation.background
-import androidx.core.content.ContextCompat
-import android.Manifest
-import android.content.pm.PackageManager
-import android.widget.Toast
 
 /**
  * Sealed class hierarchy representing the floating window state machine.
- * This provides type-safe state management and makes all states explicit.
+ *
+ * State Transition Rules:
+ * - Hidden -> Visible: New task starts
+ * - Visible -> TaskCompleted: Task finishes naturally
+ * - TaskCompleted -> Hidden: User opens app
+ * - Visible -> Dismissed: User manually stops task
+ * - Dismissed -> Visible: New task starts (requires reset)
+ * - Visible <-> TemporarilyHidden: Screenshots/gestures
+ * - Visible <-> RecordingOverlayShown: Voice recording
+ * - RecordingOverlayShown <-> ReviewOverlayShown: Review recording
+ * - RecordingOverlayShown/ReviewOverlayShown -> Visible: Overlay dismissed
+ * - Visible -> Visible: Update status/isTaskRunning (no full transition)
  */
 sealed class FloatingWindowState {
     /** Window is not attached to WindowManager */
     data object Hidden : FloatingWindowState()
 
-    /** Window is visible and interactive on screen */
+    /**
+     * Window is visible and task is running (or completed but window shown)
+     * Contains all state data needed for the visible window.
+     */
     data class Visible(
         val statusText: String,
-        val isTaskRunning: Boolean,
-        val onStopCallback: (() -> Unit)?
+        val isTaskRunning: Boolean = true,
+        val onStopCallback: (() -> Unit)? = null
     ) : FloatingWindowState()
 
-    /** Window is temporarily hidden for screenshots/gestures (size 0x0, not touchable) */
-    data object ScreenshotMode : FloatingWindowState()
+    /** Task has completed naturally (not user cancelled) */
+    data class TaskCompleted(
+        val statusText: String
+    ) : FloatingWindowState()
 
-    /** Full-screen overlay is shown (voice recording/review) */
-    data class OverlayShown(val focusable: Boolean) : FloatingWindowState()
+    /**
+     * Window is temporarily hidden for screenshots/gestures (size 0x0, not touchable)
+     * Explicitly caches the Visible state data for restoration.
+     */
+    data class TemporarilyHidden(
+        val cachedStatusText: String,
+        val cachedIsTaskRunning: Boolean,
+        val cachedOnStopCallback: (() -> Unit)?
+    ) : FloatingWindowState()
+
+    /**
+     * Voice recording overlay is shown (not focusable, full-screen visual feedback)
+     * Preserves the underlying Visible state for proper restoration.
+     */
+    data class RecordingOverlayShown(
+        val underlyingState: Visible
+    ) : FloatingWindowState()
+
+    /**
+     * Voice review overlay is shown (focusable, allows text editing)
+     * Contains the recognized text and callbacks for user actions.
+     * Preserves the underlying Visible state for proper restoration.
+     */
+    data class ReviewOverlayShown(
+        val underlyingState: Visible,
+        val text: String,
+        val onTextChange: (String) -> Unit,
+        val onSend: () -> Unit,
+        val onCancel: () -> Unit
+    ) : FloatingWindowState()
 
     /** User explicitly dismissed the window via "Return to App" button */
     data object Dismissed : FloatingWindowState()
@@ -92,19 +111,10 @@ sealed class FloatingWindowState {
 
 class FloatingWindowController(private val context: Context) : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
 
-    private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val floatingWindowManager = FloatingWindowManager(context)
     private var floatView: ComposeView? = null
     private var isShowing = false
     private lateinit var windowParams: WindowManager.LayoutParams
-    
-    // State for the UI
-    private var _statusText by mutableStateOf("")
-    private var _isTaskRunning by mutableStateOf(true)
-    private var _onStopClick: (() -> Unit)? = null
-
-    // Tracks whether user has returned to app via floating window after task completion
-    // When true, prevents auto-showing the window on app background
-    private var userDismissed = false
     
     // Lifecycle components required for Compose
     private val lifecycleRegistry = LifecycleRegistry(this)
@@ -116,11 +126,46 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
     /** Public read-only state flow for observing floating window state changes */
     val stateFlow: StateFlow<FloatingWindowState> = _stateFlow.asStateFlow()
 
+    /**
+     * Validates if a state transition is allowed.
+     * Returns true if the transition is valid, false otherwise.
+     */
+    private fun isValidTransition(from: FloatingWindowState, to: FloatingWindowState): Boolean {
+        return when (from) {
+            is FloatingWindowState.Hidden -> {
+                to is FloatingWindowState.Visible || to is FloatingWindowState.Dismissed
+            }
+            is FloatingWindowState.Visible -> {
+                to is FloatingWindowState.Hidden ||
+                to is FloatingWindowState.TemporarilyHidden ||
+                to is FloatingWindowState.RecordingOverlayShown ||
+                to is FloatingWindowState.ReviewOverlayShown ||
+                to is FloatingWindowState.Dismissed ||
+                to is FloatingWindowState.TaskCompleted ||
+                to is FloatingWindowState.Visible  // Allow update
+            }
+            is FloatingWindowState.TemporarilyHidden -> {
+                to is FloatingWindowState.Visible
+            }
+            is FloatingWindowState.RecordingOverlayShown -> {
+                to is FloatingWindowState.Visible || to is FloatingWindowState.ReviewOverlayShown
+            }
+            is FloatingWindowState.ReviewOverlayShown -> {
+                to is FloatingWindowState.Visible
+            }
+            is FloatingWindowState.Dismissed -> {
+                to is FloatingWindowState.Visible  // Only via resetForNewTask
+            }
+            is FloatingWindowState.TaskCompleted -> {
+                to is FloatingWindowState.Hidden
+            }
+        }
+    }
+
     // Coroutine scope for managing async operations
     private val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     init {
-        _statusText = context.getString(R.string.fw_ready)
         savedStateRegistryController.performRestore(null)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         Log.d("FloatingWindow", "Initial state: Hidden")
@@ -128,80 +173,167 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
 
     private var overlayView: ComposeView? = null
 
-    fun showOverlay(focusable: Boolean = false, content: @Composable () -> Unit) {
-        if (overlayView != null) hideOverlay()
+    /**
+     * Helper method to show an overlay view with the given content.
+     * @param focusable Whether the overlay should be focusable
+     * @param content The composable content to display
+     */
+    private fun showOverlayView(focusable: Boolean, content: @Composable () -> Unit) {
+        if (overlayView != null) hideOverlayView()
 
-        val flags = if (focusable) {
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        } else {
-             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        }
-
-        val overlayParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            flags,
-            PixelFormat.TRANSLUCENT
+        overlayView = floatingWindowManager.createOverlayView(
+            this@FloatingWindowController,
+            this@FloatingWindowController,
+            this@FloatingWindowController,
+            focusable,
+            content
         )
 
-        overlayView = ComposeView(context).apply {
-            setViewTreeLifecycleOwner(this@FloatingWindowController)
-            setViewTreeViewModelStoreOwner(this@FloatingWindowController)
-            setViewTreeSavedStateRegistryOwner(this@FloatingWindowController)
-            setContent {
-                MaterialTheme {
-                     content()
-                }
-            }
-        }
+        floatingWindowManager.addOverlay(overlayView!!)
+    }
 
-        try {
-            windowManager.addView(overlayView, overlayParams)
-            _stateFlow.value = FloatingWindowState.OverlayShown(focusable)
-            Log.d("FloatingWindow", "Overlay shown (focusable=$focusable)")
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+    /**
+     * Helper method to hide and remove the overlay view.
+     */
+    private fun hideOverlayView() {
+        floatingWindowManager.removeOverlay(overlayView)
+        overlayView = null
+    }
+
+    fun showOverlay(focusable: Boolean = false, content: @Composable () -> Unit) {
+        // Legacy method - kept for backward compatibility during transition
+        // TODO: Remove after FloatingWindowContent is updated to use state-based overlays
+        showOverlayView(focusable, content)
     }
 
     fun hideOverlay() {
-        if (overlayView == null) return
-        try {
-            windowManager.removeView(overlayView)
-            overlayView = null
-            // Restore previous state (likely Visible if we were showing an overlay during a task)
-            if (isShowing) {
-                _stateFlow.value = FloatingWindowState.Visible(_statusText, _isTaskRunning, _onStopClick)
-                Log.d("FloatingWindow", "Overlay hidden, restored to Visible state")
-            } else {
-                _stateFlow.value = FloatingWindowState.Hidden
-                Log.d("FloatingWindow", "Overlay hidden, state is Hidden")
+        hideOverlayView()
+        // Restore underlying state from overlay states
+        val currentState = _stateFlow.value
+        val restoredState = when (currentState) {
+            is FloatingWindowState.RecordingOverlayShown -> currentState.underlyingState
+            is FloatingWindowState.ReviewOverlayShown -> currentState.underlyingState
+            else -> {
+                Log.d("FloatingWindow", "hideOverlay: no overlay state to restore from")
+                return
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        }
+        _stateFlow.value = restoredState
+        Log.d("FloatingWindow", "Overlay hidden, restored to underlying state")
+    }
+
+    /**
+     * Resets for a new task start.
+     * Transition: Any state -> Visible (with task running)
+     *
+     * State Machine Rule: Starting a new task always transitions to Visible state,
+     * regardless of previous state (including Dismissed).
+     *
+     * For TaskCompleted state, we first transition to Hidden, then to Visible,
+     * to maintain proper state machine transitions.
+     */
+    fun resetForNewTask() {
+        controllerScope.launch {
+            Log.d("FloatingWindow", "resetForNewTask() called, current state: ${_stateFlow.value}")
+            val defaultStatus = context.getString(R.string.fw_ready)
+
+            // Handle TaskCompleted state by first transitioning to Hidden
+            if (_stateFlow.value is FloatingWindowState.TaskCompleted) {
+                setState(FloatingWindowState.Hidden)
+            }
+
+            // Now transition to Visible state with task running
+            setState(FloatingWindowState.Visible(defaultStatus, true))
         }
     }
 
     /**
-     * Resets the dismissed state for a new task.
-     * Should be called when a new task starts.
+     * Marks the current task as completed naturally.
+     * Should be called when a task completes naturally (not user cancelled).
+     * Transition: Visible -> TaskCompleted
+     *
+     * State Machine Rule: Natural completion moves to TaskCompleted state,
+     * which should be hidden when user opens app.
      */
-    fun resetForNewTask() {
-        userDismissed = false
-        Log.d("FloatingWindow", "Reset for new task, userDismissed=false")
+    fun markTaskCompleted() {
+        controllerScope.launch {
+            Log.d("FloatingWindow", "markTaskCompleted() called")
+            val currentState = _stateFlow.value
+            val currentStatus = if (currentState is FloatingWindowState.Visible) {
+                currentState.statusText
+            } else {
+                context.getString(R.string.fw_ready)
+            }
+            setState(FloatingWindowState.TaskCompleted(currentStatus))
+        }
     }
 
     /**
-     * Dismisses the floating window and marks it as user-dismissed.
-     * This prevents the window from auto-showing on app background until resetForNewTask() is called.
+     * Transitions to Hidden state when app is opened.
+     * State Machine Rule: Hide window if task is not running or task is completed.
+     * 
+     * @return true if transition occurred, false if window should stay visible
      */
-    fun dismiss() {
-        controllerScope.launch {
-            Log.d("FloatingWindow", "dismiss() called")
-            setState(FloatingWindowState.Dismissed)
+    fun handleAppResumed(): Boolean {
+        val currentState = _stateFlow.value
+        return when (currentState) {
+            is FloatingWindowState.Visible -> {
+                // Task is running - keep window visible
+                Log.d("FloatingWindow", "handleAppResumed: Task running, keeping window visible")
+                false
+            }
+            is FloatingWindowState.TaskCompleted -> {
+                // Task completed - hide window
+                Log.d("FloatingWindow", "handleAppResumed: Task completed, hiding window")
+                controllerScope.launch { setState(FloatingWindowState.Hidden) }
+                true
+            }
+            is FloatingWindowState.Dismissed -> {
+                // User explicitly dismissed - keep Dismissed state, no transition needed
+                Log.d("FloatingWindow", "handleAppResumed: Window dismissed, keeping state")
+                false
+            }
+            is FloatingWindowState.Hidden,
+            is FloatingWindowState.TemporarilyHidden,
+            is FloatingWindowState.RecordingOverlayShown,
+            is FloatingWindowState.ReviewOverlayShown -> {
+                // Already hidden or in special mode
+                false
+            }
+        }
+    }
+
+    /**
+     * Transitions to Visible state when app is backgrounded.
+     * State Machine Rule: Show window only if task is still running.
+     *
+     * @return true if transition occurred, false otherwise
+     */
+    fun handleAppPaused(): Boolean {
+        val currentState = _stateFlow.value
+        return when (currentState) {
+            is FloatingWindowState.Visible -> {
+                // Already visible
+                false
+            }
+            is FloatingWindowState.Hidden -> {
+                // Show window if we have a task in progress
+                // Use default status - caller should update via show()
+                Log.d("FloatingWindow", "handleAppPaused: Attempting to show window")
+                controllerScope.launch {
+                    val defaultStatus = context.getString(R.string.fw_ready)
+                    setState(FloatingWindowState.Visible(defaultStatus, true))
+                }
+                true
+            }
+            is FloatingWindowState.TaskCompleted,
+            is FloatingWindowState.Dismissed,
+            is FloatingWindowState.TemporarilyHidden,
+            is FloatingWindowState.RecordingOverlayShown,
+            is FloatingWindowState.ReviewOverlayShown -> {
+                // In other states, don't show
+                false
+            }
         }
     }
 
@@ -217,222 +349,195 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
         onComplete: (() -> Unit)? = null
     ) = withContext(Dispatchers.Main) {
         val oldState = _stateFlow.value
+
+        // Validate state transition
+        if (!isValidTransition(oldState, newState)) {
+            Log.e("FloatingWindow", "Invalid state transition: $oldState -> $newState")
+            return@withContext
+        }
+
         Log.d("FloatingWindow", "State transition: $oldState -> $newState")
 
         when (newState) {
             is FloatingWindowState.Hidden -> {
                 // Remove window from WindowManager
                 if (isShowing && floatView != null) {
-                    try {
-                        windowManager.removeView(floatView)
-                        isShowing = false
-                        floatView = null
-                        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
-                        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
-                    } catch (e: Exception) {
-                        Log.e("FloatingWindow", "Error hiding window", e)
-                    }
+                    floatingWindowManager.removeWindow(floatView)
+                    isShowing = false
+                    floatView = null
+                    lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+                    lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
                 }
                 _stateFlow.value = newState
-                android.os.Handler(Looper.getMainLooper()).post { onComplete?.invoke() }
+                onComplete?.invoke()
             }
 
             is FloatingWindowState.Visible -> {
-                // Check if user has dismissed the window
-                if (newState != oldState && userDismissed) {
-                    Log.d("FloatingWindow", "setState(Visible) called but user has dismissed, skipping")
-                    _stateFlow.value = FloatingWindowState.Dismissed
-                    android.os.Handler(Looper.getMainLooper()).post { onComplete?.invoke() }
-                    return@withContext
-                }
-
-                // Update state variables (for backward compatibility with existing UI code)
-                _statusText = newState.statusText
-                _isTaskRunning = newState.isTaskRunning
-                _onStopClick = newState.onStopCallback
+                // Log the state transition
+                val oldStatusText = (oldState as? FloatingWindowState.Visible)?.statusText ?: "N/A"
+                val oldIsTaskRunning = (oldState as? FloatingWindowState.Visible)?.isTaskRunning
+                Log.d("FloatingWindow", "setState: Transition to Visible - " +
+                    "status=\"$oldStatusText\"->\"${newState.statusText}\", " +
+                    "isTaskRunning=$oldIsTaskRunning->${newState.isTaskRunning}")
 
                 if (!isShowing) {
                     // Create and add the window
                     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
                     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
 
-                    windowParams = WindowManager.LayoutParams(
-                        WindowManager.LayoutParams.WRAP_CONTENT,
-                        WindowManager.LayoutParams.WRAP_CONTENT,
-                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-                                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                        PixelFormat.TRANSLUCENT
-                    )
+                    windowParams = floatingWindowManager.createWindowParams()
 
-                    windowParams.gravity = Gravity.BOTTOM or Gravity.START
-                    windowParams.x = 0
-                    windowParams.y = 20
+                    floatView = floatingWindowManager.createComposeView(
+                        this@FloatingWindowController,
+                        this@FloatingWindowController,
+                        this@FloatingWindowController
+                    ) {
+                        FloatingWindowContent(
+                            floatingWindowController = this@FloatingWindowController,
+                            onShowOverlay = { focusable, content ->
+                                showOverlay(focusable, content)
+                            },
+                            onHideOverlay = {
+                                hideOverlay()
+                            },
+                            onSendVoice = { text ->
+                                try {
+                                    Log.d("AutoGLM_Trace", "FloatingWindow: Sending voice command broadcast: $text")
+                                    val broadcastIntent = Intent("com.sidhu.androidautoglm.ACTION_VOICE_COMMAND_BROADCAST")
+                                    broadcastIntent.putExtra("voice_text", text)
+                                    broadcastIntent.setPackage(context.packageName)
 
-                    floatView = ComposeView(context).apply {
-                        setViewTreeLifecycleOwner(this@FloatingWindowController)
-                        setViewTreeViewModelStoreOwner(this@FloatingWindowController)
-                        setViewTreeSavedStateRegistryOwner(this@FloatingWindowController)
-
-                        setContent {
-                            FloatingWindowContent(
-                                status = _statusText,
-                                isTaskRunning = _isTaskRunning,
-                                onAction = {
-                                    if (_isTaskRunning) {
-                                        _onStopClick?.invoke()
-                                    } else {
-                                        // Launch App and dismiss floating window
-                                        try {
-                                            val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-                                            if (intent != null) {
-                                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                context.startActivity(intent)
-                                                AutoGLMService.getInstance()?.dismissFloatingWindow()
-                                            } else {
-                                                Log.e("FloatingWindow", "Launch intent not found")
-                                            }
-                                        } catch (e: Exception) {
-                                            e.printStackTrace()
-                                        }
-                                    }
-                                },
-                                onShowOverlay = { focusable, content ->
-                                    showOverlay(focusable, content)
-                                },
-                                onHideOverlay = {
-                                    hideOverlay()
-                                },
-                                onSendVoice = { text ->
-                                    try {
-                                        Log.d("AutoGLM_Trace", "FloatingWindow: Sending voice command broadcast: $text")
-                                        val broadcastIntent = Intent("com.sidhu.androidautoglm.ACTION_VOICE_COMMAND_BROADCAST")
-                                        broadcastIntent.putExtra("voice_text", text)
-                                        broadcastIntent.setPackage(context.packageName)
-
-                                        context.sendOrderedBroadcast(
-                                            broadcastIntent,
-                                            null,
-                                            object : android.content.BroadcastReceiver() {
-                                                override fun onReceive(ctx: Context?, intent: Intent?) {
-                                                    if (resultCode != android.app.Activity.RESULT_OK) {
-                                                        try {
-                                                            val activityIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-                                                            if (activityIntent != null) {
-                                                                activityIntent.action = "ACTION_VOICE_SEND"
-                                                                activityIntent.putExtra("voice_text", text)
-                                                                activityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                                                                context.startActivity(activityIntent)
-                                                                controllerScope.launch { hide() }
-                                                            }
-                                                        } catch (e: Exception) {
-                                                            e.printStackTrace()
+                                    context.sendOrderedBroadcast(
+                                        broadcastIntent,
+                                        null,
+                                        object : android.content.BroadcastReceiver() {
+                                            override fun onReceive(ctx: Context?, intent: Intent?) {
+                                                if (resultCode != android.app.Activity.RESULT_OK) {
+                                                    try {
+                                                        val activityIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                                                        if (activityIntent != null) {
+                                                            activityIntent.action = "ACTION_VOICE_SEND"
+                                                            activityIntent.putExtra("voice_text", text)
+                                                            activityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                                                            context.startActivity(activityIntent)
+                                                            controllerScope.launch { removeAndHide() }
                                                         }
+                                                    } catch (e: Exception) {
+                                                        e.printStackTrace()
                                                     }
                                                 }
-                                            },
-                                            null,
-                                            android.app.Activity.RESULT_CANCELED,
-                                            null,
-                                            null
-                                        )
-                                    } catch (e: Exception) {
-                                        e.printStackTrace()
-                                    }
-                                },
-                                onDrag = { x: Float, y: Float ->
-                                    windowParams.x += x.roundToInt()
-                                    windowParams.y -= y.roundToInt()
-                                    try {
-                                        windowManager.updateViewLayout(floatView, windowParams)
-                                    } catch (e: Exception) {
-                                        e.printStackTrace()
-                                    }
+                                            }
+                                        },
+                                        null,
+                                        android.app.Activity.RESULT_CANCELED,
+                                        null,
+                                        null
+                                    )
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
                                 }
-                            )
+                            },
+                            onDrag = { x: Float, y: Float ->
+                                windowParams.x += x.roundToInt()
+                                windowParams.y -= y.roundToInt()
+                                floatingWindowManager.updateWindowLayout(floatView, windowParams)
+                            }
+                        )
+                    }
+
+                    if (floatingWindowManager.addWindow(floatView!!, windowParams)) {
+                        isShowing = true
+                    }
+
+                    _stateFlow.value = newState
+
+                    // Wait for layout if callback provided
+                    if (onComplete != null) {
+                        val view = floatView
+                        if (view != null) {
+                            view.viewTreeObserver?.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                                override fun onGlobalLayout() {
+                                    view.viewTreeObserver?.removeOnGlobalLayoutListener(this)
+                                    onComplete.invoke()
+                                }
+                            })
+                        } else {
+                            onComplete.invoke()
                         }
                     }
-
-                    try {
-                        windowManager.addView(floatView, windowParams)
-                        isShowing = true
-                    } catch (e: Exception) {
-                        Log.e("FloatingWindow", "Error showing window", e)
-                    }
-                } else if (oldState is FloatingWindowState.ScreenshotMode) {
-                    // Restoring from ScreenshotMode - make visible again
-                    try {
-                        floatView?.visibility = android.view.View.VISIBLE
-                        windowParams.flags = windowParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-                        windowParams.width = WindowManager.LayoutParams.WRAP_CONTENT
-                        windowParams.height = WindowManager.LayoutParams.WRAP_CONTENT
-                        windowManager.updateViewLayout(floatView, windowParams)
-                    } catch (e: Exception) {
-                        Log.e("FloatingWindow", "Error restoring from ScreenshotMode", e)
-                    }
-                }
-
-                _stateFlow.value = newState
-
-                // Wait for layout if callback provided
-                if (onComplete != null) {
-                    val view = floatView
-                    if (view != null) {
-                        view.viewTreeObserver?.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
-                            override fun onGlobalLayout() {
-                                view.viewTreeObserver?.removeOnGlobalLayoutListener(this)
-                                android.os.Handler(Looper.getMainLooper()).post { onComplete.invoke() }
-                            }
-                        })
-                    } else {
-                        android.os.Handler(Looper.getMainLooper()).post { onComplete.invoke() }
-                    }
+                } else if (oldState is FloatingWindowState.TemporarilyHidden) {
+                    // Restoring from TemporarilyHidden - make visible again
+                    floatingWindowManager.restoreWindow(floatView, windowParams)
+                    _stateFlow.value = newState
+                    onComplete?.invoke()
                 } else {
-                    android.os.Handler(Looper.getMainLooper()).post { onComplete?.invoke() }
+                    // Just update state (already visible)
+                    _stateFlow.value = newState
+                    onComplete?.invoke()
                 }
             }
 
-            is FloatingWindowState.ScreenshotMode -> {
-                // Hide window for screenshots (size 0x0, not touchable)
+            is FloatingWindowState.TemporarilyHidden -> {
+                // Hide window for screenshots/gestures (size 0x0, not touchable)
                 if (isShowing && floatView != null) {
-                    try {
-                        floatView?.visibility = android.view.View.GONE
-                        windowParams.flags = windowParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                        windowParams.width = 0
-                        windowParams.height = 0
-                        windowManager.updateViewLayout(floatView, windowParams)
-                    } catch (e: Exception) {
-                        Log.e("FloatingWindow", "Error entering ScreenshotMode", e)
-                    }
+                    floatingWindowManager.suspendWindow(floatView, windowParams)
                 }
                 _stateFlow.value = newState
-                android.os.Handler(Looper.getMainLooper()).post { onComplete?.invoke() }
+
+                // Wait for 2 frames + 16ms delay to ensure window is fully removed from screen
+                // This prevents the floating window from being captured in screenshots
+                // Reference: https://github.com/sidhu-master/AndroidAutoGLM/pull/15
+                val choreographer = Choreographer.getInstance()
+                choreographer.postFrameCallback { _ ->
+                    // First frame rendered
+                    choreographer.postFrameCallback {
+                        // Second frame rendered - add 16ms safety margin
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            onComplete?.invoke()
+                        }, 16)
+                    }
+                }
             }
 
             is FloatingWindowState.Dismissed -> {
                 // User explicitly dismissed - same as Hidden but prevents auto-show
-                userDismissed = true
                 if (isShowing && floatView != null) {
-                    try {
-                        windowManager.removeView(floatView)
-                        isShowing = false
-                        floatView = null
-                        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
-                        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
-                    } catch (e: Exception) {
-                        Log.e("FloatingWindow", "Error dismissing window", e)
-                    }
+                    floatingWindowManager.removeWindow(floatView)
+                    isShowing = false
+                    floatView = null
+                    lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+                    lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
                 }
                 _stateFlow.value = newState
-                android.os.Handler(Looper.getMainLooper()).post { onComplete?.invoke() }
+                onComplete?.invoke()
             }
 
-            is FloatingWindowState.OverlayShown -> {
-                // Overlay state is managed separately by showOverlay/hideOverlay
-                // Just update the stateFlow for observability
+            is FloatingWindowState.RecordingOverlayShown -> {
+                // Show recording overlay (not focusable)
+                showOverlayView(false) { RecordingOverlayContent() }
                 _stateFlow.value = newState
-                android.os.Handler(Looper.getMainLooper()).post { onComplete?.invoke() }
+                onComplete?.invoke()
+            }
+
+            is FloatingWindowState.ReviewOverlayShown -> {
+                // Show review overlay (focusable) with review content
+                val reviewState = newState as FloatingWindowState.ReviewOverlayShown
+                showOverlayView(true) {
+                    VoiceReviewOverlayContent(
+                        text = reviewState.text,
+                        onTextChange = reviewState.onTextChange,
+                        onSend = reviewState.onSend,
+                        onCancel = reviewState.onCancel
+                    )
+                }
+                _stateFlow.value = newState
+                onComplete?.invoke()
+            }
+
+            is FloatingWindowState.TaskCompleted -> {
+                // Task completed - keep window visible but mark state
+                _stateFlow.value = newState
+                onComplete?.invoke()
             }
         }
     }
@@ -445,58 +550,91 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
     fun show(onStop: () -> Unit, isRunning: Boolean = true) {
         // Launch in controllerScope since setState is a suspend function
         controllerScope.launch {
-            if (userDismissed) {
-                Log.d("FloatingWindow", "show() called but user has dismissed, skipping")
-                return@launch
-            }
-
             val currentState = _stateFlow.value
-            if (currentState is FloatingWindowState.Visible) {
-                // Already showing - update the callback and state if different
-                _onStopClick = onStop
-                if (_isTaskRunning != isRunning) {
-                    Log.d("FloatingWindow", "Updating task running state from $_isTaskRunning to $isRunning")
-                    _isTaskRunning = isRunning
-                    // Update stateFlow
-                    _stateFlow.value = currentState.copy(
-                        statusText = _statusText,
-                        isTaskRunning = isRunning,
-                        onStopCallback = onStop
-                    )
-                }
+
+            // Don't show if dismissed
+            if (currentState is FloatingWindowState.Dismissed) {
+                Log.d("FloatingWindow", "show() called but window is dismissed, skipping")
                 return@launch
             }
 
-            // Transition to Visible state
-            setState(FloatingWindowState.Visible(_statusText, isRunning, onStop))
-        }
-    }
+            if (currentState is FloatingWindowState.Visible) {
+                // Already showing - update using unified method
+                updateVisibleState(
+                    isTaskRunning = isRunning,
+                    onStopCallback = onStop,
+                    reason = "show"
+                )
+                return@launch
+            }
 
-    fun updateStatus(status: String) {
-        _statusText = status
-        // Also update stateFlow if currently Visible
-        val currentState = _stateFlow.value
-        if (currentState is FloatingWindowState.Visible) {
-            _stateFlow.value = currentState.copy(statusText = status)
-        }
-    }
-
-    fun setTaskRunning(running: Boolean) {
-        _isTaskRunning = running
-        // Also update stateFlow if currently Visible
-        val currentState = _stateFlow.value
-        if (currentState is FloatingWindowState.Visible) {
-            _stateFlow.value = currentState.copy(isTaskRunning = running)
+            // Transition to Visible state with callback
+            val defaultStatus = context.getString(R.string.fw_ready)
+            setState(FloatingWindowState.Visible(defaultStatus, isRunning, onStop))
         }
     }
 
     /**
-     * Sets screenshot mode for the floating window.
+     * Unified method to update Visible state.
+     * This is the single entry point for all internal Visible state updates.
+     * Now goes through setState() for proper validation.
      *
-     * @param isScreenshotting True to hide window, false to show
+     * @param statusText New status text (null to keep current)
+     * @param isTaskRunning New task running state (null to keep current)
+     * @param onStopCallback New stop callback (null to keep current)
+     * @param reason Calling context for logging (e.g., "updateStatus", "setTaskRunning")
+     */
+    private suspend fun updateVisibleState(
+        statusText: String? = null,
+        isTaskRunning: Boolean? = null,
+        onStopCallback: (() -> Unit)? = null,
+        reason: String
+    ) {
+        val currentState = _stateFlow.value
+
+        // Build new state with updated values
+        val oldStatusText = (currentState as? FloatingWindowState.Visible)?.statusText ?: ""
+        val oldIsTaskRunning = (currentState as? FloatingWindowState.Visible)?.isTaskRunning ?: true
+        val oldCallback = (currentState as? FloatingWindowState.Visible)?.onStopCallback
+
+        val newStatusText = statusText ?: oldStatusText
+        val newIsTaskRunning = isTaskRunning ?: oldIsTaskRunning
+        val newCallback = onStopCallback ?: oldCallback
+
+        // Log the state transition
+        Log.d("FloatingWindow", "updateVisibleState [$reason]: " +
+            "status=\"$oldStatusText\"->\"$newStatusText\"${if (statusText != null) "" else " (unchanged)"}, " +
+            "isTaskRunning=$oldIsTaskRunning->$newIsTaskRunning${if (isTaskRunning != null) "" else " (unchanged)"}")
+
+        // Go through setState for validation (single point of synchronization)
+        val newState = FloatingWindowState.Visible(
+            statusText = newStatusText,
+            isTaskRunning = newIsTaskRunning,
+            onStopCallback = newCallback
+        )
+        setState(newState)
+    }
+
+    fun updateStatus(status: String) {
+        controllerScope.launch {
+            updateVisibleState(statusText = status, reason = "updateStatus")
+        }
+    }
+
+    fun setTaskRunning(running: Boolean) {
+        controllerScope.launch {
+            updateVisibleState(isTaskRunning = running, reason = "setTaskRunning")
+        }
+    }
+
+    /**
+     * Sets temporarily hidden mode for the floating window.
+     * Used during screenshots and gesture operations to temporarily hide the window.
+     *
+     * @param isHidden True to hide window, false to show
      * @param onComplete Optional callback invoked when layout is complete (if provided, waits for layout)
      */
-    fun setScreenshotMode(isScreenshotting: Boolean, onComplete: (() -> Unit)? = null) {
+    fun setTemporarilyHidden(isHidden: Boolean, onComplete: (() -> Unit)? = null) {
         // Launch in controllerScope since setState is a suspend function
         controllerScope.launch {
             if (!isShowing || floatView == null) {
@@ -504,18 +642,68 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                 return@launch
             }
 
-            if (isScreenshotting) {
-                // Enter ScreenshotMode
-                setState(FloatingWindowState.ScreenshotMode, onComplete)
+            val currentState = _stateFlow.value
+
+            if (isHidden && currentState is FloatingWindowState.Visible) {
+                // Enter TemporarilyHidden - cache current Visible state
+                Log.d("FloatingWindow", "setTemporarilyHidden: Entering TemporarilyHidden mode")
+                setState(
+                    FloatingWindowState.TemporarilyHidden(
+                        cachedStatusText = currentState.statusText,
+                        cachedIsTaskRunning = currentState.isTaskRunning,
+                        cachedOnStopCallback = currentState.onStopCallback
+                    ),
+                    onComplete
+                )
+            } else if (!isHidden && currentState is FloatingWindowState.TemporarilyHidden) {
+                // Restore to Visible state using cached values
+                Log.d("FloatingWindow", "setTemporarilyHidden: Restoring from TemporarilyHidden to Visible")
+                setState(
+                    FloatingWindowState.Visible(
+                        statusText = currentState.cachedStatusText,
+                        isTaskRunning = currentState.cachedIsTaskRunning,
+                        onStopCallback = currentState.cachedOnStopCallback
+                    ),
+                    onComplete
+                )
             } else {
-                // Restore to Visible state - need current status text and callback
-                setState(FloatingWindowState.Visible(_statusText, _isTaskRunning, _onStopClick), onComplete)
+                onComplete?.invoke()
             }
         }
     }
 
+    /**
+     * Helper function for the common pattern of suspending window visibility during an operation.
+     * The window is hidden before the operation and restored after completion.
+     * If the operation throws, the window is still restored.
+     *
+     * @param operation The suspend operation to perform while window is hidden
+     * @return The result of the operation
+     */
+    suspend fun <T> useWindowSuspension(operation: suspend () -> T): T {
+        val result = CompletableDeferred<T>()
+        setTemporarilyHidden(true) {
+            // Window is now hidden, proceed with operation
+            controllerScope.launch {
+                try {
+                    val opResult = operation()
+                    // Restore window after operation completes
+                    setTemporarilyHidden(false) {
+                        result.complete(opResult)
+                    }
+                } catch (e: Throwable) {
+                    // Restore window even on error
+                    setTemporarilyHidden(false) {
+                        result.completeExceptionally(e)
+                    }
+                }
+            }
+        }
+        return result.await()
+    }
+
     fun isOccupyingSpace(x: Float, y: Float): Boolean {
-        // Only occupy space if window is actually visible (not in ScreenshotMode or Dismissed)
+        // Only occupy space if window is actually visible (not TemporarilyHidden or Dismissed)
         if (_stateFlow.value !is FloatingWindowState.Visible) return false
         if (!isShowing || floatView == null || floatView?.visibility != android.view.View.VISIBLE) return false
 
@@ -534,8 +722,7 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
         if (_stateFlow.value !is FloatingWindowState.Visible) return
         if (!isOccupyingSpace(targetX, targetY)) return
 
-        val metrics = context.resources.displayMetrics
-        val screenHeight = metrics.heightPixels
+        val screenHeight = DisplayUtils.getScreenHeight(context)
 
         // If target is in bottom half, move window to top. Else move to bottom.
         val targetInBottomHalf = targetY > screenHeight / 2
@@ -549,321 +736,72 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
         // Only update if significantly different
         if (kotlin.math.abs(windowParams.y - newY) > 200) {
             windowParams.y = newY
-            try {
-                windowManager.updateViewLayout(floatView, windowParams)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            floatingWindowManager.updateWindowLayout(floatView, windowParams)
         }
     }
 
-    fun hide() {
+    /**
+     * Removes the floating window from WindowManager and hides it.
+     * This is a permanent hide - the window is completely removed.
+     * Use setTemporarilyHidden() for temporary hiding during screenshots/gestures.
+     */
+    fun removeAndHide() {
         // Launch in controllerScope since setState is a suspend function
         controllerScope.launch {
             if (!isShowing) return@launch
 
-            Log.d("FloatingWindow", "hide() called", Exception("Stack trace"))
+            Log.d("FloatingWindow", "removeAndHide() called", Exception("Stack trace"))
             setState(FloatingWindowState.Hidden)
         }
     }
 
-    override val lifecycle: Lifecycle
+    /**
+     * Dismisses the floating window and prevents it from auto-showing.
+     * This should be called when user explicitly dismisses the window.
+     * The window will not auto-show until resetForNewTask() is called.
+     * This suspend function waits for the window to be fully removed before returning.
+     */
+    suspend fun dismiss() = withContext(Dispatchers.Main) {
+        Log.d("FloatingWindow", "dismiss() called")
+        val completed = CompletableDeferred<Unit>()
+        setState(FloatingWindowState.Dismissed) {
+            completed.complete(Unit)
+        }
+        completed.await()
+    }
+
+    override val lifecycle
         get() = lifecycleRegistry
 
     override val savedStateRegistry: SavedStateRegistry
         get() = savedStateRegistryController.savedStateRegistry
 }
 
+/**
+ * Voice overlay content composables.
+ * These are internal wrappers for the state-based voice overlay system.
+ */
+
 @Composable
-fun FloatingWindowContent(
-    status: String,
-    isTaskRunning: Boolean,
-    onAction: () -> Unit,
-    onShowOverlay: (Boolean, @Composable () -> Unit) -> Unit,
-    onHideOverlay: () -> Unit,
-    onSendVoice: (String) -> Unit,
-    onDrag: (Float, Float) -> Unit
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    
-    // Voice State
-    var voiceResultText by remember { mutableStateOf("") }
-    var showVoiceReview by remember { mutableStateOf(false) }
-    var isCancelling by remember { mutableStateOf(false) }
-    
-    // Speech Recognition
-    val speechRecognizerManager = remember { SpeechRecognizerManager(context) }
-    val isListening by speechRecognizerManager.isListening.collectAsState()
-    val soundLevel by speechRecognizerManager.soundLevel.collectAsState()
-    
-    val modelState by SherpaModelManager.modelState.collectAsState()
-    val isModelReady = modelState is SherpaModelManager.ModelState.Ready
-    
-    // Ensure model is initialized
-    LaunchedEffect(Unit) {
-         if (modelState is SherpaModelManager.ModelState.NotInitialized) {
-            SherpaModelManager.initModel(context)
-        }
-    }
-    
-    DisposableEffect(Unit) {
-        onDispose {
-            speechRecognizerManager.destroy()
-        }
-    }
-
-    // Effect to manage overlay based on state
-    LaunchedEffect(isListening, showVoiceReview) {
-        if (showVoiceReview) {
-            onShowOverlay(true) { // Focusable
-                 VoiceReviewOverlay(
-                    text = voiceResultText,
-                    onTextChange = { voiceResultText = it },
-                    onCancel = {
-                        showVoiceReview = false
-                        voiceResultText = ""
-                        onHideOverlay()
-                    },
-                    onSend = {
-                        if (voiceResultText.isNotBlank()) {
-                            onSendVoice(voiceResultText)
-                        }
-                        showVoiceReview = false
-                        voiceResultText = ""
-                        onHideOverlay()
-                    }
-                )
-            }
-        } else if (isListening) {
-            onShowOverlay(false) { // Not focusable, but full screen for visual
-                 RecordingIndicator(soundLevel = soundLevel)
-            }
-        } else {
-            // If neither listening nor reviewing, hide overlay
-            // But be careful not to hide if we are just transitioning
-            // Logic: if both false, hide.
-            onHideOverlay()
-        }
-    }
-
-    MaterialTheme {
-        Surface(
-            modifier = Modifier
-                .width(350.dp) // Fixed width for consistent dragging
-                .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        onDrag(dragAmount.x, dragAmount.y)
-                    }
-                }
-                .padding(16.dp),
-            shape = RoundedCornerShape(24.dp),
-            color = Color.White,
-            shadowElevation = 8.dp
-        ) {
-            Row(
-                modifier = Modifier
-                    .padding(16.dp)
-                    .fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    val isError = status.startsWith("Error") || status.startsWith("出错") || status.startsWith("运行异常")
-                    val titleText = when {
-                        isTaskRunning -> stringResource(R.string.fw_running)
-                        isError -> stringResource(R.string.fw_error_title)
-                        else -> stringResource(R.string.fw_ready_title)
-                    }
-                    val titleColor = when {
-                        isTaskRunning -> Color.Gray
-                        isError -> MaterialTheme.colorScheme.error
-                        else -> Color(0xFF4CAF50)
-                    }
-
-                    Text(
-                        text = titleText,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = titleColor
-                    )
-                    Text(
-                        text = status,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1
-                    )
-                }
-                
-                // Right side action button
-                if (isTaskRunning) {
-                     Button(
-                        onClick = onAction,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFFFEBEE),
-                            contentColor = Color.Red
-                        ),
-                        shape = RoundedCornerShape(50),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Stop, 
-                            contentDescription = null, 
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(stringResource(R.string.fw_stop))
-                    }
-                } else {
-                    // Not running: Show Mic Button AND Return Button (maybe?)
-                    // Or just Mic button and if clicked -> text input?
-                    // User requested "Send new task via voice".
-                    
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // Mic Button (Hold to talk)
-                         val vibrator = remember {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-                                vibratorManager.defaultVibrator
-                            } else {
-                                @Suppress("DEPRECATION")
-                                context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-                            }
-                        }
-                        
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .background(Color(0xFFE3F2FD), androidx.compose.foundation.shape.CircleShape)
-                                .pointerInput(isModelReady, modelState) {
-                                     if (!isModelReady || modelState is SherpaModelManager.ModelState.Error || modelState is SherpaModelManager.ModelState.NotInitialized) {
-                                        detectTapGestures(
-                                            onTap = {
-                                                if (modelState is SherpaModelManager.ModelState.NotInitialized || modelState is SherpaModelManager.ModelState.Error) {
-                                                    Toast.makeText(context, context.getString(R.string.voice_model_initializing_toast), Toast.LENGTH_SHORT).show()
-                                                    scope.launch {
-                                                        SherpaModelManager.initModel(context)
-                                                    }
-                                                } else if (modelState is SherpaModelManager.ModelState.Loading) {
-                                                    Toast.makeText(context, context.getString(R.string.voice_model_loading_toast), Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        )
-                                        return@pointerInput
-                                    }
-                                    
-                                    awaitEachGesture {
-                                        val down = awaitFirstDown(requireUnconsumed = false)
-                                        
-                                        // Check permission
-                                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                                            Toast.makeText(context, context.getString(R.string.requesting_microphone_permission_toast), Toast.LENGTH_SHORT).show()
-                                            try {
-                                                val intent = Intent(context, com.sidhu.androidautoglm.MainActivity::class.java).apply {
-                                                    action = "ACTION_REQUEST_MIC_PERMISSION"
-                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                }
-                                                context.startActivity(intent)
-                                            } catch (e: Exception) {
-                                                e.printStackTrace()
-                                                Toast.makeText(context, context.getString(R.string.failed_launch_permission_toast), Toast.LENGTH_SHORT).show()
-                                            }
-                                            return@awaitEachGesture
-                                        }
-
-                                        // Start Listening
-                                        val startJob = scope.launch(Dispatchers.Main) {
-                                            voiceResultText = ""
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                                vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
-                                            } else {
-                                                @Suppress("DEPRECATION")
-                                                vibrator.vibrate(50)
-                                            }
-                                            speechRecognizerManager.startListening(
-                                                onResultCallback = { result -> voiceResultText = result },
-                                                onErrorCallback = { error -> 
-                                                    Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
-                                                }
-                                            )
-                                        }
-
-                                        isCancelling = false
-                                        var cancelled = false
-                                        
-                                        try {
-                                            while (true) {
-                                                val event = awaitPointerEvent()
-                                                val change = event.changes.firstOrNull { it.id == down.id }
-                                                if (change == null || !change.pressed) break
-                                                
-                                                val threshold = 50.dp.toPx()
-                                                // If dragging up, cancel
-                                                // Note: Window Y decreases as we go up.
-                                                // change.position is relative to the element.
-                                                // Dragging UP means negative Y.
-                                                if (change.position.y < -threshold) {
-                                                    if (!isCancelling) isCancelling = true
-                                                } else {
-                                                    if (isCancelling) isCancelling = false
-                                                }
-                                            }
-                                        } catch (e: Exception) {
-                                            cancelled = true
-                                        }
-                                        
-                                        // Stopped Listening
-                                        scope.launch(Dispatchers.Main) {
-                                            startJob.join()
-                                            if (cancelled || isCancelling) {
-                                                speechRecognizerManager.cancel()
-                                            } else {
-                                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                                    vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
-                                                } else {
-                                                    @Suppress("DEPRECATION")
-                                                    vibrator.vibrate(50)
-                                                }
-                                                speechRecognizerManager.stopListening()
-                                                if (voiceResultText.isNotBlank()) {
-                                                    showVoiceReview = true
-                                                }
-                                            }
-                                            isCancelling = false
-                                        }
-                                    }
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                             Icon(
-                                Icons.Default.Mic, 
-                                contentDescription = null, 
-                                tint = Color(0xFF2196F3),
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-
-                        // Return Button
-                        Button(
-                            onClick = onAction,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFE3F2FD),
-                                contentColor = Color(0xFF2196F3)
-                            ),
-                            shape = RoundedCornerShape(50),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.OpenInNew, 
-                                contentDescription = null, 
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(stringResource(R.string.fw_return_app))
-                        }
-                    }
-                }
-            }
-        }
-    }
+private fun RecordingOverlayContent() {
+    // Placeholder for recording overlay
+    // The actual implementation will be managed by FloatingWindowContent
+    // which has access to SpeechRecognizerManager
+    RecordingIndicator(soundLevel = 0f)
 }
 
+@Composable
+private fun VoiceReviewOverlayContent(
+    text: String,
+    onTextChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onCancel: () -> Unit
+) {
+    // Delegate to the existing VoiceReviewOverlay component
+    VoiceReviewOverlay(
+        text = text,
+        onTextChange = onTextChange,
+        onCancel = onCancel,
+        onSend = onSend
+    )
+}

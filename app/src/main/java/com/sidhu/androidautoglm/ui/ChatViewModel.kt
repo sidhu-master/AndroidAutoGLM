@@ -66,12 +66,11 @@ data class ChatUiState(
     val baseUrl: String = "https://open.bigmodel.cn/api/paas/v4",
     val isGemini: Boolean = false,
     val modelName: String = "autoglm-phone",
-    val isTaskRunning: Boolean = false,
     val activeConversationId: Long? = null,
     val currentConversation: DbConversation? = null
 ) {
     // Convenience properties for grouping related state
-    val taskState: TaskState get() = TaskState(isRunning, isLoading, isTaskRunning, error)
+    val taskState: TaskState get() = TaskState(isRunning, isLoading, error)
     val conversationState: ConversationState get() = ConversationState(activeConversationId, currentConversation, messages)
     val permissionState: PermissionState get() = PermissionState(missingAccessibilityService, missingOverlayPermission, missingBatteryExemption)
     val settingsState: SettingsState get() = SettingsState(apiKey, baseUrl, isGemini, modelName)
@@ -82,7 +81,6 @@ data class ChatUiState(
         return copy(
             isRunning = newTaskState.isRunning,
             isLoading = newTaskState.isLoading,
-            isTaskRunning = newTaskState.isTaskRunning,
             error = newTaskState.error
         )
     }
@@ -112,7 +110,6 @@ data class ChatUiState(
 data class TaskState(
     val isRunning: Boolean = false,
     val isLoading: Boolean = false,
-    val isTaskRunning: Boolean = false,
     val error: String? = null
 )
 
@@ -360,7 +357,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Update UI state - explicitly clear error to avoid showing cancellation as error
         _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false, error = null)
         val service = AutoGLMService.getInstance()
-        service?.setTaskRunning(false)
         service?.updateFloatingStatus(getApplication<Application>().getString(R.string.status_stopped))
     }
 
@@ -447,15 +443,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             error = null
         )
 
-        if (!DEBUG_MODE) {
-            AutoGLMService.getInstance()?.setTaskRunning(true)
-        }
-
         viewModelScope.launch(Dispatchers.IO + currentTaskJob!!) {
             Log.d("AutoGLM_Debug", "Coroutine started")
-
-            // Update task running state
-            _uiState.value = _uiState.value.copy(isTaskRunning = true)
 
             // Refresh app mapping before each request
             AppMapper.refreshInstalledApps()
@@ -491,7 +480,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         onStop = { stopTask() },
                         isRunning = true
                     )
-                    service.setTaskRunning(true)
 
                     // Only go home (minimize) if we are currently in the app
                     // If we are using floating window over another app, we shouldn't go home
@@ -635,6 +623,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         isFinished = true
                         _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
                         service?.updateFloatingStatus(getApplication<Application>().getString(R.string.action_finish))
+                        
+                        // Mark task as completed in FloatingWindowController
+                        val floatingWindow = AutoGLMService.getInstance()?.floatingWindowController
+                        floatingWindow?.markTaskCompleted()
+                        
                         updateTaskState(TaskEndState.COMPLETED, step)
                         break
                     }
@@ -665,9 +658,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 postError(getApplication<Application>().getString(R.string.error_runtime_exception, e.message))
             } finally {
                 withContext(Dispatchers.Main) {
-                    val service = AutoGLMService.getInstance()
-                    service?.setTaskRunning(false)
-                    
                     if (!isFinished && !isActive && _uiState.value.error == null) {
                          _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
                     }
@@ -679,6 +669,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (!DEBUG_MODE) {
                     if (step >= maxSteps) {
                         service?.updateFloatingStatus(getApplication<Application>().getString(R.string.error_task_terminated_max_steps))
+                        
+                        // Mark task as completed in FloatingWindowController
+                        val floatingWindow = AutoGLMService.getInstance()?.floatingWindowController
+                        floatingWindow?.markTaskCompleted()
+                        
                         updateTaskState(TaskEndState.MAX_STEPS_REACHED, step)
                     }
                 }
@@ -698,7 +693,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun postError(msg: String) {
         _uiState.value = _uiState.value.copy(error = msg, isRunning = false, isLoading = false)
         val service = AutoGLMService.getInstance()
-        service?.setTaskRunning(false)
 
         val currentPkg = service?.currentApp?.value
         val myPkg = getApplication<Application>().packageName
@@ -860,11 +854,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 conversationUseCase.updateTaskState(conversationId, state, stepCount)
-
-                // Update UI state based on new task state
-                _uiState.value = _uiState.value.copy(
-                    isTaskRunning = false
-                )
+                // Note: UI state (isRunning, isLoading) is already updated before calling this method
             } catch (e: Exception) {
                 Log.e("ChatViewModel", "Failed to update task state", e)
             }

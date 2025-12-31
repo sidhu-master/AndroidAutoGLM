@@ -331,22 +331,22 @@ fun ChatScreen(
 
                     IconButton(
                         onClick = { showDeleteDialog = true },
-                        enabled = !uiState.isTaskRunning
+                        enabled = !uiState.isRunning
                     ) {
                         Icon(
                             imageVector = Icons.Default.Delete,
                             contentDescription = stringResource(R.string.delete_current_conversation_title),
-                            tint = if (uiState.isTaskRunning) Color.Gray.copy(alpha = 0.5f) else Color.Gray
+                            tint = if (uiState.isRunning) Color.Gray.copy(alpha = 0.5f) else Color.Gray
                         )
                     }
                     IconButton(
                         onClick = onOpenConversationList,
-                        enabled = !uiState.isTaskRunning
+                        enabled = !uiState.isRunning
                     ) {
                         Icon(
                             Icons.AutoMirrored.Filled.List,
                             contentDescription = stringResource(R.string.conversation_list_title),
-                            tint = if (uiState.isTaskRunning) Color.Gray.copy(alpha = 0.5f) else Color.Gray
+                            tint = if (uiState.isRunning) Color.Gray.copy(alpha = 0.5f) else Color.Gray
                         )
                     }
                     IconButton(onClick = onOpenSettings) {
@@ -533,7 +533,7 @@ fun ChatScreen(
                             onValueChange = { inputText = it },
                             modifier = Modifier
                                 .weight(1f),
-                            enabled = !uiState.isTaskRunning,
+                            enabled = !uiState.isRunning,
                             placeholder = { Text(stringResource(R.string.input_placeholder), color = Color.Gray) },
                             shape = MaterialTheme.shapes.medium,
                             colors = TextFieldDefaults.colors(
@@ -555,7 +555,7 @@ fun ChatScreen(
                             viewModel.sendMessage(inputText)
                             inputText = ""
                         },
-                        enabled = !uiState.isTaskRunning && isInputValid
+                        enabled = !uiState.isRunning && isInputValid
                     ) {
                         Surface(
                             shape = MaterialTheme.shapes.extraLarge,

@@ -204,25 +204,22 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Handle Floating Window Visibility based on App Lifecycle
+        // Handle Floating Window Visibility based on App Lifecycle using State Machine
         lifecycle.addObserver(androidx.lifecycle.LifecycleEventObserver { _, event ->
             val service = AutoGLMService.getInstance()
             if (service != null) {
                 when (event) {
                     androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
-                        // App is visible, hide floating window
-                        service.hideFloatingWindow()
-                        // Messages are automatically updated via reactive Flow when database changes
+                        // Use state machine to handle app resume
+                        // State machine will decide whether to hide window based on current state
+                        val hidden = service.floatingWindowController?.handleAppResumed() ?: false
+                        Log.d("MainActivity", "ON_RESUME: Window hidden=$hidden")
                     }
                     androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
-                        // App is backgrounded, show floating window
-                        // Note: If user has dismissed the window via "Return to App" button,
-                        // the controller will be null and a new one won't be created
-                        // until a new task starts (with forceCreate=true)
-                        service.showFloatingWindow(
-                            onStop = { viewModel.stopTask() },
-                            isRunning = service.isTaskRunning.value
-                        )
+                        // Use state machine to handle app pause
+                        // State machine will show window if task is running
+                        val shown = service.floatingWindowController?.handleAppPaused() ?: false
+                        Log.d("MainActivity", "ON_PAUSE: Window shown=$shown")
                     }
                     else -> {}
                 }
