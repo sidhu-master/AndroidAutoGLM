@@ -18,17 +18,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.sidhu.androidautoglm.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.sidhu.androidautoglm.data.TaskEndState
 import com.sidhu.androidautoglm.data.entity.Conversation
-import com.sidhu.androidautoglm.ui.util.displayTextOrNull
-import com.sidhu.androidautoglm.ui.util.displayColorOrNull
+import com.sidhu.androidautoglm.ui.common.ConfirmDialog
+import com.sidhu.androidautoglm.ui.common.InputDialog
+import com.sidhu.androidautoglm.ui.common.TaskStateBadge
 
 /**
  * Screen displaying the list of all conversations.
@@ -42,7 +41,6 @@ fun ConversationListScreen(
     onBack: () -> Unit,
     viewModel: ConversationListViewModel = viewModel()
 ) {
-    val context = LocalContext.current
     val conversations by viewModel.conversations.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
     var showDeleteDialog by remember { mutableStateOf<Conversation?>(null) }
@@ -64,7 +62,6 @@ fun ConversationListScreen(
     // Handle rename
     if (showRenameDialog != null) {
         RenameConversationDialog(
-            conversation = showRenameDialog!!,
             initialTitle = showRenameDialog!!.title,
             onDismiss = { showRenameDialog = null },
             onConfirm = { newTitle ->
@@ -217,8 +214,6 @@ fun ConversationListScreen(
                                 ConversationListItem(
                                     conversation = conversation,
                                     timeText = viewModel.formatTimestamp(conversation.updatedAt),
-                                    taskStateText = conversation.lastTaskState.displayTextOrNull(context),
-                                    taskStateColor = conversation.lastTaskState.displayColorOrNull(),
                                     onClick = { onConversationSelected(conversation.id) },
                                     onLongClick = { showRenameDialog = conversation },
                                     onDelete = { showDeleteDialog = conversation }
@@ -255,8 +250,6 @@ fun ConversationListScreen(
 fun ConversationListItem(
     conversation: Conversation,
     timeText: String,
-    taskStateText: String,
-    taskStateColor: String,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onDelete: () -> Unit
@@ -301,18 +294,8 @@ fun ConversationListItem(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         // Task state badge
-                        if (taskStateText.isNotEmpty()) {
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = Color(android.graphics.Color.parseColor(taskStateColor))
-                            ) {
-                                Text(
-                                    taskStateText,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.White
-                                )
-                            }
+                        conversation.lastTaskState?.let {
+                            TaskStateBadge(it)
                         }
                     }
                 }
@@ -361,25 +344,13 @@ fun DeleteConversationDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.delete_conversation)) },
-        text = { Text(stringResource(R.string.delete_conversation_message, conversation.title)) },
-        confirmButton = {
-            TextButton(
-                onClick = onConfirm,
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                )
-            ) {
-                Text(stringResource(R.string.delete_conversation))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.cancel))
-            }
-        }
+    ConfirmDialog(
+        title = stringResource(R.string.delete_conversation),
+        message = stringResource(R.string.delete_conversation_message, conversation.title),
+        confirmText = stringResource(R.string.delete_conversation),
+        onConfirm = onConfirm,
+        onDismiss = onDismiss,
+        isDangerous = true
     )
 }
 
@@ -391,25 +362,13 @@ fun DeleteAllConversationsDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.clear_all_conversations_title)) },
-        text = { Text(stringResource(R.string.clear_all_conversations_message)) },
-        confirmButton = {
-            TextButton(
-                onClick = onConfirm,
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                )
-            ) {
-                Text(stringResource(R.string.delete_conversation))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.cancel))
-            }
-        }
+    ConfirmDialog(
+        title = stringResource(R.string.clear_all_conversations_title),
+        message = stringResource(R.string.clear_all_conversations_message),
+        confirmText = stringResource(R.string.delete_conversation),
+        onConfirm = onConfirm,
+        onDismiss = onDismiss,
+        isDangerous = true
     )
 }
 
@@ -418,53 +377,15 @@ fun DeleteAllConversationsDialog(
  */
 @Composable
 fun RenameConversationDialog(
-    conversation: Conversation,
     initialTitle: String,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit
 ) {
-    var text by remember { mutableStateOf(initialTitle) }
-    var isError by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.rename_conversation)) },
-        text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = {
-                    text = it
-                    isError = it.isBlank()
-                },
-                label = { Text(stringResource(R.string.conversation_title_hint)) },
-                isError = isError,
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            if (isError) {
-                Text(
-                    stringResource(R.string.conversation_title_empty_error),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    if (text.isNotBlank()) {
-                        onConfirm(text)
-                    }
-                },
-                enabled = text.isNotBlank()
-            ) {
-                Text(stringResource(R.string.confirm))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.cancel))
-            }
-        }
+    InputDialog(
+        title = stringResource(R.string.rename_conversation),
+        initialValue = initialTitle,
+        label = stringResource(R.string.conversation_title_hint),
+        onConfirm = onConfirm,
+        onDismiss = onDismiss
     )
 }

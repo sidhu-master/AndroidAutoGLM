@@ -58,7 +58,11 @@ import com.sidhu.androidautoglm.utils.SherpaModelManager
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.activity.ComponentActivity
+import android.app.Activity
 import android.widget.Toast
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 import androidx.compose.ui.text.style.TextDecoration
 import kotlinx.coroutines.withContext
@@ -69,9 +73,8 @@ import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
-import com.sidhu.androidautoglm.ui.util.displayText
-import com.sidhu.androidautoglm.ui.util.displayColor
 import com.sidhu.androidautoglm.ui.model.FormattedContent
+import com.sidhu.androidautoglm.ui.common.TaskStateBadge
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.foundation.Image
@@ -133,10 +136,34 @@ fun ChatScreen(
     // Voice Review State
     var showVoiceReview by remember { mutableStateOf(false) }
     var voiceResultText by remember { mutableStateOf("") }
-    
+
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val listState = rememberLazyListState()
+
+    // Control system bars (status bar and navigation bar) when in fullscreen image mode
+    val window = (context as? Activity)?.window
+    val insetsController = remember { window?.let { WindowCompat.getInsetsController(it, window.decorView) } }
+
+    LaunchedEffect(fullscreenImage) {
+        if (fullscreenImage != null) {
+            // Hide system bars for true fullscreen
+            insetsController?.let { controller ->
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+                controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            // Show system bars when exiting fullscreen
+            insetsController?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    // Cleanup: restore system bars when composable is disposed
+    DisposableEffect(Unit) {
+        onDispose {
+            insetsController?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
 
     LaunchedEffect(uiState.messages.size) {
         if (uiState.messages.isNotEmpty()) {
@@ -252,22 +279,13 @@ fun ChatScreen(
                                 style = MaterialTheme.typography.titleLarge,
                                 color = Color.Black,
                                 maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
                             // Task state badge
                             uiState.currentConversation?.lastTaskState?.let { state ->
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Surface(
-                                    shape = MaterialTheme.shapes.small,
-                                    color = Color(android.graphics.Color.parseColor(state.displayColor()))
-                                ) {
-                                    Text(
-                                        state.displayText(context),
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color.White
-                                    )
-                                }
+                                TaskStateBadge(state)
                             }
                         }
                         // Step count display
@@ -358,10 +376,6 @@ fun ChatScreen(
                             onShowImage = { bitmap -> fullscreenImage = bitmap }
                         )
                     }
-                }
-
-                if (uiState.isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
             }
 
@@ -534,43 +548,27 @@ fun ChatScreen(
                         )
                     }
 
-                    // Send Button / Continue Button
-                    if (uiState.currentConversation?.lastTaskState != null) {
-                        // Continue Task Button
-                        Button(
-                            onClick = { viewModel.continueTask() },
-                            enabled = !uiState.isLoading && !uiState.isRunning && !uiState.isTaskRunning,
-                            modifier = Modifier.size(80.dp, 48.dp),
+                    // Send Button
+                    val isInputValid by remember(inputText) { derivedStateOf { inputText.isNotBlank() } }
+                    IconButton(
+                        onClick = {
+                            viewModel.sendMessage(inputText)
+                            inputText = ""
+                        },
+                        enabled = !uiState.isTaskRunning && isInputValid
+                    ) {
+                        Surface(
                             shape = MaterialTheme.shapes.extraLarge,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (!uiState.isLoading && !uiState.isRunning && !uiState.isTaskRunning)
-                                    MaterialTheme.colorScheme.primary else Color.Gray
+                            color = if (isInputValid)
+                                MaterialTheme.colorScheme.primary else Color.Gray,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = stringResource(R.string.send_button),
+                                tint = Color.White,
+                                modifier = Modifier.padding(8.dp)
                             )
-                        ) {
-                            Text(stringResource(R.string.continue_task), color = Color.White)
-                        }
-                    } else {
-                        // Send Button (normal task)
-                        IconButton(
-                            onClick = {
-                                viewModel.sendMessage(inputText)
-                                inputText = ""
-                            },
-                            enabled = !uiState.isLoading && !uiState.isTaskRunning && inputText.isNotBlank()
-                        ) {
-                            Surface(
-                                shape = MaterialTheme.shapes.extraLarge,
-                                color = if (!uiState.isLoading && inputText.isNotBlank())
-                                    MaterialTheme.colorScheme.primary else Color.Gray,
-                                modifier = Modifier.size(40.dp)
-                            ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.Send,
-                                    contentDescription = stringResource(R.string.send_button),
-                                    tint = Color.White,
-                                    modifier = Modifier.padding(8.dp)
-                                )
-                            }
                         }
                     }
                 }

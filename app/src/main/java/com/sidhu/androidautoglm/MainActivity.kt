@@ -42,7 +42,7 @@ class MainActivity : ComponentActivity() {
                 val text = intent.getStringExtra("voice_text")
                 Log.d("AutoGLM_Trace", "BroadcastReceiver received voice command: $text")
                 if (!text.isNullOrBlank()) {
-                    viewModel.sendMessage(text, isContinueCommand = true)
+                    viewModel.sendMessage(text)
                     resultCode = android.app.Activity.RESULT_OK
                 }
             }
@@ -249,7 +249,7 @@ class MainActivity : ComponentActivity() {
             val text = intent.getStringExtra("voice_text")
             Log.d("AutoGLM_Trace", "handleIntent received voice command: $text")
             if (!text.isNullOrBlank()) {
-                viewModel.sendMessage(text, isContinueCommand = true)
+                viewModel.sendMessage(text)
                 moveTaskToBack(true)
                 // Clear the intent action so it doesn't trigger again on rotation/recreation if we were to rely on intent state
                 intent.action = "" 

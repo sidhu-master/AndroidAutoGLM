@@ -384,10 +384,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // _uiState.value = _uiState.value.copy(messages = listOf(UiMessage("assistant", getApplication<Application>().getString(R.string.welcome_message))))
     }
 
-    fun sendMessage(text: String, isContinueCommand: Boolean = false) {
-        Log.d("AutoGLM_Trace", "sendMessage called with text: $text, isContinueCommand: $isContinueCommand")
-        // Skip blank check for continue commands
-        if (text.isBlank() && !isContinueCommand) return
+    fun sendMessage(text: String) {
+        Log.d("AutoGLM_Trace", "sendMessage called with text: $text")
+        // Skip blank check
+        if (text.isBlank()) return
 
         // Ensure we have an active conversation
         if (_uiState.value.activeConversationId == null) {
@@ -460,45 +460,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // Refresh app mapping before each request
             AppMapper.refreshInstalledApps()
 
-            // Save user message to database when user actively inputs a command
-            // This happens once per user input, not in the loop
-            if (!isContinueCommand && _uiState.value.activeConversationId != null) {
+            // Save user message to database
+            if (_uiState.value.activeConversationId != null) {
                 try {
                     repository.saveUserMessage(_uiState.value.activeConversationId!!, text)
                 } catch (e: Exception) {
                     Log.e("ChatViewModel", "Failed to save user message", e)
                 }
             }
-            // Check for continuation
-            val isContinuation = isContinueCommand && apiHistory.isNotEmpty()
 
-            if (isContinuation) {
-                Log.d("AutoGLM_Debug", "Continuing conversation with history size: ${apiHistory.size}")
-                // Sanitize history: retain text, remove images from past turns to save tokens/bandwidth
-                // The new turn will start with a fresh screenshot of the current state
-                val sanitizedHistory = apiHistory.map { msg ->
-                    if (msg.content is List<*>) {
-                        @Suppress("UNCHECKED_CAST")
-                        val list = msg.content as List<*>
-                        // Filter items keeping only text
-                        val textOnly = list.filter { item ->
-                            (item as? com.sidhu.androidautoglm.network.ContentItem)?.type == "text"
-                        }
-                        Message(msg.role, textOnly)
-                    } else {
-                        msg
-                    }
-                }
-                apiHistory.clear()
-                apiHistory.addAll(sanitizedHistory)
-            } else {
-                Log.d("AutoGLM_Debug", "Starting new conversation history")
-                apiHistory.clear()
-                // Add System Prompt with Date matching Python logic
-                val dateFormat = SimpleDateFormat("yyyy年MM月dd日 EEEE", Locale.getDefault())
-                val dateStr = getApplication<Application>().getString(R.string.prompt_date_prefix) + dateFormat.format(Date())
-                apiHistory.add(Message("system", dateStr + "\n" + ModelClient.SYSTEM_PROMPT))
-            }
+            // Start new conversation with system prompt
+            Log.d("AutoGLM_Debug", "Starting new conversation history")
+            apiHistory.clear()
+            // Add System Prompt with Date matching Python logic
+            val dateFormat = SimpleDateFormat("yyyy年MM月dd日 EEEE", Locale.getDefault())
+            val dateStr = getApplication<Application>().getString(R.string.prompt_date_prefix) + dateFormat.format(Date())
+            apiHistory.add(Message("system", dateStr + "\n" + ModelClient.SYSTEM_PROMPT))
 
             var currentPrompt = text
             var step = 0
@@ -515,14 +492,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         isRunning = true
                     )
                     service.setTaskRunning(true)
-                    
+
                     // Only go home (minimize) if we are currently in the app
                     // If we are using floating window over another app, we shouldn't go home
                     val currentPkg = service.currentApp.value
                     val myPkg = getApplication<Application>().packageName
-                    Log.d("AutoGLM_Trace", "goHome check: currentPkg=$currentPkg, myPkg=$myPkg, isContinue=$isContinueCommand")
-                    
-                    if (!isContinueCommand && (currentPkg == myPkg || currentPkg == null)) {
+                    Log.d("AutoGLM_Trace", "goHome check: currentPkg=$currentPkg, myPkg=$myPkg")
+
+                    if (currentPkg == myPkg || currentPkg == null) {
                         Log.d("AutoGLM_Trace", "Executing goHome()")
                         service.goHome()
                     } else {
@@ -856,56 +833,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } catch (e: Exception) {
                 Log.e("ChatViewModel", "Failed to rename conversation", e)
-            }
-        }
-    }
-
-    /**
-     * Continue a task that was previously stopped or reached max steps
-     */
-    fun continueTask() {
-        viewModelScope.launch {
-            try {
-                val conversationId = _uiState.value.activeConversationId
-                if (conversationId == null) {
-                    Log.e("ChatViewModel", "No active conversation to continue")
-                    return@launch
-                }
-
-                // First, load the conversation to ensure UI shows latest data
-                // This also ensures conversation entity is up to date
-                val conversation = conversationUseCase.loadConversation(conversationId)
-                if (conversation == null) {
-                    Log.e("ChatViewModel", "Conversation not found: $conversationId")
-                    return@launch
-                }
-
-                // Update current conversation info
-                _uiState.value = _uiState.value.copy(currentConversation = conversation)
-
-                // Load conversation history from database
-                val messagesWithImages = conversationUseCase.loadMessages(conversationId)
-
-                if (messagesWithImages.isEmpty()) {
-                    Log.e("ChatViewModel", "No messages to continue in conversation: $conversationId")
-                    postError(getApplication<Application>().getString(R.string.no_messages_to_continue_error))
-                    return@launch
-                }
-
-                // Update UI messages first to ensure consistency
-                _uiState.value = _uiState.value.copy(messages = messagesWithImages.toUiMessages(getApplication()))
-
-                // Rebuild apiHistory from database messages using UseCase
-                apiHistory.clear()
-                apiHistory.addAll(conversationUseCase.rebuildApiHistory(messagesWithImages))
-
-                Log.d("ChatViewModel", "Loaded ${apiHistory.size} messages for continuation")
-
-                // Call sendMessage with continue flag
-                sendMessage("", isContinueCommand = true)
-            } catch (e: Exception) {
-                Log.e("ChatViewModel", "Failed to continue task", e)
-                postError(getApplication<Application>().getString(R.string.error_runtime_exception, e.message))
             }
         }
     }
