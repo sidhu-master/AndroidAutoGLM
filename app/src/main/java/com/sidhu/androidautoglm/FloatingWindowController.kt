@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import android.os.Handler
 import android.os.Looper
 import kotlin.math.roundToInt
@@ -351,13 +353,16 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
      * Core state machine method for managing floating window state transitions.
      * This is the preferred method for all state changes going forward.
      *
+     * Uses Mutex to ensure atomic state transitions, preventing race conditions.
+     *
      * @param newState The target state to transition to
      * @param onComplete Optional callback invoked after the transition is complete (on main thread)
      */
     suspend fun setState(
         newState: FloatingWindowState,
         onComplete: (() -> Unit)? = null
-    ) = withContext(Dispatchers.Main) {
+    ) = stateMutex.withLock {
+        withContext(Dispatchers.Main) {
         val oldState = _stateFlow.value
 
         // Validate state transition
@@ -548,6 +553,7 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                 onComplete?.invoke()
             }
         }
+    }
     }
 
     /**
