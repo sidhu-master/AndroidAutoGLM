@@ -29,7 +29,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import android.os.Handler
 import android.os.Looper
 import kotlin.math.roundToInt
@@ -113,8 +114,24 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
 
     private val floatingWindowManager = FloatingWindowManager(context)
     private var floatView: ComposeView? = null
-    private var isShowing = false
     private lateinit var windowParams: WindowManager.LayoutParams
+
+    /**
+     * Mutex to ensure state transitions are atomic.
+     * This prevents race conditions during concurrent state changes.
+     */
+    private val stateMutex = Mutex()
+
+    /**
+     * Whether the floating window is currently attached to WindowManager.
+     *
+     * This is based on the actual window state (floatView != null and attached)
+     * rather than the state machine, to ensure consistency during state transitions.
+     *
+     * The view is attached to WindowManager when its parent is non-null.
+     */
+    private val isShowing: Boolean
+        get() = floatView != null && floatView?.parent != null
     
     // Lifecycle components required for Compose
     private val lifecycleRegistry = LifecycleRegistry(this)
@@ -341,13 +358,16 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
      * Core state machine method for managing floating window state transitions.
      * This is the preferred method for all state changes going forward.
      *
+     * Uses Mutex to ensure atomic state transitions, preventing race conditions.
+     *
      * @param newState The target state to transition to
      * @param onComplete Optional callback invoked after the transition is complete (on main thread)
      */
     suspend fun setState(
         newState: FloatingWindowState,
         onComplete: (() -> Unit)? = null
-    ) = withContext(Dispatchers.Main) {
+    ) = stateMutex.withLock {
+        withContext(Dispatchers.Main) {
         val oldState = _stateFlow.value
 
         // Validate state transition
@@ -363,7 +383,6 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                 // Remove window from WindowManager
                 if (isShowing && floatView != null) {
                     floatingWindowManager.removeWindow(floatView)
-                    isShowing = false
                     floatView = null
                     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
                     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
@@ -446,7 +465,7 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                     }
 
                     if (floatingWindowManager.addWindow(floatView!!, windowParams)) {
-                        isShowing = true
+                        // isShowing will be true after state transition
                     }
 
                     _stateFlow.value = newState
@@ -503,7 +522,6 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                 // User explicitly dismissed - same as Hidden but prevents auto-show
                 if (isShowing && floatView != null) {
                     floatingWindowManager.removeWindow(floatView)
-                    isShowing = false
                     floatView = null
                     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
                     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
@@ -540,6 +558,7 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                 onComplete?.invoke()
             }
         }
+    }
     }
 
     /**

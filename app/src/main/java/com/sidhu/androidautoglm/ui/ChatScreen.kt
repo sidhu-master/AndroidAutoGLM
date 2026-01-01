@@ -70,13 +70,11 @@ import kotlinx.coroutines.Dispatchers
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.core.*
 import kotlinx.coroutines.launch
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import com.sidhu.androidautoglm.ui.model.FormattedContent
 import com.sidhu.androidautoglm.ui.common.TaskStateBadge
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.foundation.Image
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.draw.clip

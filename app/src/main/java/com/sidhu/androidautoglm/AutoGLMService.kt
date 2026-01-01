@@ -17,17 +17,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
-import android.graphics.PixelFormat
-import android.view.Gravity
-import android.view.View
-import android.view.WindowManager
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.os.Handler
-import android.os.Looper
 import com.sidhu.androidautoglm.utils.DisplayUtils
-import android.view.Choreographer
+import android.view.WindowManager
 
 class AutoGLMService : AccessibilityService() {
 

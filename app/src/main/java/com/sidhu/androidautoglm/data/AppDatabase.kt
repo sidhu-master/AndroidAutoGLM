@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import androidx.room.TypeConverters
 import com.sidhu.androidautoglm.data.dao.ConversationDao
 import com.sidhu.androidautoglm.data.dao.MessageDao
 import com.sidhu.androidautoglm.data.entity.Conversation
