@@ -50,7 +50,7 @@ class ActionExecutor(private val service: AutoGLMService) {
                 // Need a map of App Name -> Package Name. For now, just try generic intent or implement a mapper.
                 // Simplified: Assume appName IS packageName for this MVP or implement a small mapper
                 // A real implementation needs the package mapper from the original project
-                val packageName = AppMapper.getPackageName(action.appName)
+                val packageName = AppMatcher.getPackageName(action.appName)
                 if (packageName != null) {
                     val intent = service.packageManager.getLaunchIntentForPackage(packageName)
                     if (intent != null) {

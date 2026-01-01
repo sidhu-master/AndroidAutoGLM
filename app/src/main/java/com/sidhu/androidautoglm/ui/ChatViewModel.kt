@@ -447,7 +447,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             Log.d("AutoGLM_Debug", "Coroutine started")
 
             // Refresh app mapping before each request
-            AppMapper.refreshInstalledApps()
+            AppMapper.refreshLauncherApps()
 
             // Save user message to database
             if (_uiState.value.activeConversationId != null) {
