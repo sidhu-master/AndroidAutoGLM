@@ -112,8 +112,19 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
 
     private val floatingWindowManager = FloatingWindowManager(context)
     private var floatView: ComposeView? = null
-    private var isShowing = false
     private lateinit var windowParams: WindowManager.LayoutParams
+
+    /**
+     * Whether the floating window is currently attached to WindowManager.
+     * This is derived from the state machine - true when window is shown,
+     * temporarily hidden, or has overlays (recording/review).
+     */
+    private val isShowing: Boolean
+        get() = _stateFlow.value is FloatingWindowState.Visible ||
+                _stateFlow.value is FloatingWindowState.TaskCompleted ||
+                _stateFlow.value is FloatingWindowState.TemporarilyHidden ||
+                _stateFlow.value is FloatingWindowState.RecordingOverlayShown ||
+                _stateFlow.value is FloatingWindowState.ReviewOverlayShown
     
     // Lifecycle components required for Compose
     private val lifecycleRegistry = LifecycleRegistry(this)
@@ -362,7 +373,6 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                 // Remove window from WindowManager
                 if (isShowing && floatView != null) {
                     floatingWindowManager.removeWindow(floatView)
-                    isShowing = false
                     floatView = null
                     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
                     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
@@ -445,7 +455,7 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                     }
 
                     if (floatingWindowManager.addWindow(floatView!!, windowParams)) {
-                        isShowing = true
+                        // isShowing will be true after state transition
                     }
 
                     _stateFlow.value = newState
@@ -502,7 +512,6 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                 // User explicitly dismissed - same as Hidden but prevents auto-show
                 if (isShowing && floatView != null) {
                     floatingWindowManager.removeWindow(floatView)
-                    isShowing = false
                     floatView = null
                     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
                     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
