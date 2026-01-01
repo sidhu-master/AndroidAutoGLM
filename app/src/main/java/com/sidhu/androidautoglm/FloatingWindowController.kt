@@ -117,21 +117,16 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
     private lateinit var windowParams: WindowManager.LayoutParams
 
     /**
-     * Mutex to ensure state transitions are atomic.
-     * This prevents race conditions during concurrent state changes.
-     */
-    private val stateMutex = Mutex()
-
-    /**
      * Whether the floating window is currently attached to WindowManager.
-     *
-     * This is based on the actual window state (floatView != null and attached)
-     * rather than the state machine, to ensure consistency during state transitions.
-     *
-     * The view is attached to WindowManager when its parent is non-null.
+     * This is derived from the state machine - true when window is shown,
+     * temporarily hidden, or has overlays (recording/review).
      */
     private val isShowing: Boolean
-        get() = floatView != null && floatView?.parent != null
+        get() = _stateFlow.value is FloatingWindowState.Visible ||
+                _stateFlow.value is FloatingWindowState.TaskCompleted ||
+                _stateFlow.value is FloatingWindowState.TemporarilyHidden ||
+                _stateFlow.value is FloatingWindowState.RecordingOverlayShown ||
+                _stateFlow.value is FloatingWindowState.ReviewOverlayShown
     
     // Lifecycle components required for Compose
     private val lifecycleRegistry = LifecycleRegistry(this)
