@@ -22,6 +22,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.os.Handler
 import android.os.Looper
+import android.view.Choreographer
 
 class AutoGLMService : AccessibilityService() {
 
@@ -108,6 +109,14 @@ class AutoGLMService : AccessibilityService() {
     /**
      * Sets floating window visibility without removing it and waits for layout to complete.
      *
+     * Uses a hybrid synchronization strategy:
+     * 1. Waits for layout completion via ViewTreeObserver
+     * 2. Waits for 2 frames via Choreographer for rendering pipeline
+     * 3. Adds a small delay (16ms ~ 1 frame) as safety margin for SurfaceFlinger composition
+     *
+     * This multi-layer approach ensures the window is fully rendered or removed
+     * even in edge cases like triple buffering or high system load.
+     *
      * This is preferred over hideFloatingWindow() for temporary hiding during gestures/screenshots
      * where you need to ensure the layout is updated before proceeding.
      */
@@ -115,7 +124,17 @@ class AutoGLMService : AccessibilityService() {
         suspendCoroutine<Unit> { continuation ->
             Handler(Looper.getMainLooper()).post {
                 floatingWindowController?.setScreenshotMode(!visible) {
-                    continuation.resume(Unit)
+                    // Step 1: Wait for 2 frames via Choreographer
+                    val choreographer = Choreographer.getInstance()
+                    choreographer.postFrameCallback { _ ->
+                        choreographer.postFrameCallback {
+                            // Step 2: Add small delay (16ms ~ 1 frame) as safety margin
+                            // This accounts for SurfaceFlinger composition time and triple buffering
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                continuation.resume(Unit)
+                            }, 16) // ~1 frame at 60fps
+                        }
+                    }
                 }
             }
         }
