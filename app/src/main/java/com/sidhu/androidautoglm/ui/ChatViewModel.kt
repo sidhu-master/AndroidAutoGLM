@@ -16,6 +16,7 @@ import com.sidhu.androidautoglm.network.Message
 import com.sidhu.androidautoglm.network.ModelClient
 import com.sidhu.androidautoglm.AutoGLMService
 import com.sidhu.androidautoglm.R
+import com.sidhu.androidautoglm.utils.AppStateTracker
 import com.sidhu.androidautoglm.utils.DisplayUtils
 import com.sidhu.androidautoglm.data.TaskEndState
 import com.sidhu.androidautoglm.data.entity.Conversation as DbConversation
@@ -475,10 +476,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // Reset floating window state for new task
                 service.resetFloatingWindowForNewTask()
 
+                // Check if app is in foreground
+                val isAppInForeground = AppStateTracker.isAppInForeground(getApplication())
+                Log.d("AutoGLM_Trace", "App in foreground: $isAppInForeground")
+
                 withContext(Dispatchers.Main) {
-                    // Always go home before starting task
-                    Log.d("AutoGLM_Trace", "Executing goHome()")
-                    service.goHome()
+                    // Only go home if this app is in the foreground
+                    if (isAppInForeground) {
+                        Log.d("AutoGLM_Trace", "App is in foreground, executing goHome()")
+                        service.goHome()
+                    } else {
+                        Log.d("AutoGLM_Trace", "App not in foreground, skipping goHome()")
+                    }
 
                     // Show floating window immediately after starting goHome
                     // Note: takeScreenshot() will auto-hide the window via useWindowSuspension
@@ -488,13 +497,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
 
-                // Wait for goHome animation to complete
-                val animationDelay = DisplayUtils.getAnimationDelay(getApplication())
-                if (animationDelay > 0) {
-                    Log.d("AutoGLM_Trace", "Waiting for transition animation to complete: ${animationDelay}ms")
-                    delay(animationDelay)
-                } else {
-                    Log.d("AutoGLM_Trace", "Animations disabled, skipping animation delay")
+                // Wait for goHome animation to complete (only if we executed goHome)
+                if (isAppInForeground) {
+                    val animationDelay = DisplayUtils.getAnimationDelay(getApplication())
+                    if (animationDelay > 0) {
+                        Log.d("AutoGLM_Trace", "Waiting for transition animation to complete: ${animationDelay}ms")
+                        delay(animationDelay)
+                    } else {
+                        Log.d("AutoGLM_Trace", "Animations disabled, skipping animation delay")
+                    }
                 }
             }
 
