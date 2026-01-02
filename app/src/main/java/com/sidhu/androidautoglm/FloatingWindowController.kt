@@ -756,6 +756,29 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
     }
 
     /**
+     * Force moves the window to the top of the screen.
+     * Useful when we know the bottom area needs to be clear (e.g., for keyboard).
+     */
+    fun moveWindowToTop() {
+        // Launch in controllerScope to ensure UI updates happen on Main thread
+        controllerScope.launch {
+            // Only move if window is in Visible state
+            if (_stateFlow.value !is FloatingWindowState.Visible) return@launch
+            
+            val screenHeight = DisplayUtils.getScreenHeight(context)
+            val newY = screenHeight - 400 // Move well away from bottom area
+            
+            // Only update if not already near top
+            if (windowParams.y < newY - 100) { // If current Y is significantly less than target (i.e., lower on screen)
+                 windowParams.y = newY
+                 floatingWindowManager.updateWindowLayout(floatView, windowParams)
+            }
+        }
+    }
+    
+
+
+    /**
      * Removes the floating window from WindowManager and hides it.
      * This is a permanent hide - the window is completely removed.
      * Use setTemporarilyHidden() for temporary hiding during screenshots/gestures.

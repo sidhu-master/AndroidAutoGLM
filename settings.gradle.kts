@@ -16,3 +16,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "AndroidAutoGLM"
 include(":app")
+include(":autoinput")
+project(":autoinput").projectDir = file("../autoinput")
+

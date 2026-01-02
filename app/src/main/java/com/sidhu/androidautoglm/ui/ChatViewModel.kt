@@ -606,7 +606,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     
                     // Update Floating Window Status with friendly description
                     service?.updateFloatingStatus(getActionDescription(action))
-                    
+
                     // 5. Execute Action
                     val executor = actionExecutor
                     if (executor == null) {

@@ -25,6 +25,8 @@ class TextInputHandler(private val service: AutoGLMService) {
         private const val DEFAULT_VERIFY_DELAY_MS = 150L      // Wait for text to be processed
     }
 
+    private val keyboardAgent by lazy { com.sidhu.autoinput.KeyboardAgent(service) }
+
     /**
      * Result of a text input verification
      */
@@ -269,9 +271,11 @@ class TextInputHandler(private val service: AutoGLMService) {
     /**
      * Main entry point: inputs text with focus management, verification, and fallback.
      *
+     * @param text The text to input
      * @return true if text input was successful (full or partial)
      */
     suspend fun inputText(text: String): Boolean {
+        Log.d("VisualInputTest", ">>> Start inputText: '$text'")
         if (text.isEmpty()) {
             Log.w(TAG, "Empty text provided")
             return false
@@ -280,36 +284,94 @@ class TextInputHandler(private val service: AutoGLMService) {
         Log.d(TAG, "Inputting text: '$text' (${text.length} chars)")
 
         // Ensure we have a focused editable node
-        val targetNode = ensureFocusedEditableNode()
+        var targetNode = ensureFocusedEditableNode()
         if (targetNode == null) {
-            Log.e(TAG, "No focused editable node available")
-            return false
+            Log.w(TAG, "No focused editable node available. Will attempt Visual Input as primary method.")
+            Log.d("VisualInputTest", "TargetNode is null, proceeding with Visual Input")
+        } else {
+            Log.d("VisualInputTest", "TargetNode found, but trying Visual Input first")
         }
 
-        // Truncate if max length is known
-        val maxLength = getMaxLength(targetNode)
-        val textToSet = if (maxLength != null && maxLength < text.length) {
-            Log.d(TAG, "Text truncated to max length $maxLength")
-            truncateToMaxLength(text, maxLength)
+        // Truncate if max length is known (only possible if node found)
+        val textToSet = if (targetNode != null) {
+            val maxLength = getMaxLength(targetNode)
+             if (maxLength != null && maxLength < text.length) {
+                Log.d(TAG, "Text truncated to max length $maxLength")
+                truncateToMaxLength(text, maxLength)
+            } else {
+                text
+            }
         } else {
             text
         }
 
-        // Step 1: Try ACTION_SET_TEXT with verification
+        // Step 1: Default to Visual Input (Keyboard Simulation)
+        Log.i(TAG, "Starting Text Input. Default method: Visual Keyboard Simulation")
+        Log.d("VisualInputTest", "Step 1: Preparing for Visual Input. Moving window...")
+        
+        // Move window to top to avoid obstructing keyboard
+        service.floatingWindowController?.moveWindowToTop()
+        delay(300) // Give it a moment to move
+
+        // Take initial screenshot for keyboard layout detection
+        Log.d("VisualInputTest", "Step 2: Taking screenshot for keyboard scan...")
+        val screenshot = service.takeScreenshot(timeoutMs = 2000)
+        
+        var visualInputSuccess = false
+        if (screenshot != null) {
+            Log.d("VisualInputTest", "Screenshot captured successfully (${screenshot.width}x${screenshot.height}). Calling KeyboardAgent...")
+            if (keyboardAgent.type(
+                textToSet, 
+                screenshot,
+                screenshotProvider = {
+                    Log.d("VisualInputTest", "Provider: Capturing new screenshot for candidates...")
+                    Log.d(TAG, "Capturing new screenshot for candidate selection...")
+                    service.takeScreenshot(timeoutMs = 2000)
+                }
+            )) {
+                Log.d(TAG, "Text input successful via Keyboard Agent")
+                Log.d("VisualInputTest", "KeyboardAgent.type returned TRUE. Visual Input Success.")
+                delay(500) // Wait for UI to settle
+                visualInputSuccess = true
+                return true
+            } else {
+                Log.w(TAG, "Keyboard Agent failed, falling back to legacy methods...")
+                Log.d("VisualInputTest", "KeyboardAgent.type returned FALSE. Visual Input Failed.")
+            }
+        } else {
+            Log.e(TAG, "Screenshot failed, skipping Visual Input. Falling back to legacy methods...")
+            Log.e("VisualInputTest", "Screenshot was NULL.")
+        }
+
+        // If Visual Input failed, checking if we can use legacy methods
+        if (targetNode == null) {
+            Log.e(TAG, "Visual Input failed and no accessible node available for fallback.")
+            Log.d("VisualInputTest", "No fallback node available. Aborting.")
+            // Try one last desperate search for a node in case focus changed during visual attempt
+            targetNode = ensureFocusedEditableNode()
+            if (targetNode == null) return false
+        }
+
+        // Step 2: Fallback to ACTION_SET_TEXT
+        Log.d(TAG, "Attempting fallback: ACTION_SET_TEXT")
+        Log.d("VisualInputTest", "Attempting Fallback: SET_TEXT")
         if (setTextWithVerification(targetNode, textToSet)) {
             Log.d(TAG, "Text input successful via ACTION_SET_TEXT")
+            Log.d("VisualInputTest", "Fallback SET_TEXT Success")
             return true
         }
 
-        // Step 2: Verification failed - fall back to clipboard paste
+        // Step 3: Verification failed - fall back to clipboard paste
         Log.w(TAG, "ACTION_SET_TEXT verification failed, falling back to clipboard paste")
+        Log.d("VisualInputTest", "Attempting Fallback: PASTE")
 
-        return pasteText(targetNode, textToSet).also { isSuccess ->
-            if (isSuccess) {
-                Log.d(TAG, "Text input successful via ACTION_PASTE fallback")
-            } else {
-                Log.e(TAG, "All text input methods failed")
-            }
+        if (pasteText(targetNode, textToSet)) {
+            Log.d(TAG, "Text input successful via ACTION_PASTE fallback")
+            return true
         }
+
+        Log.e(TAG, "All text input methods failed")
+        Log.e("VisualInputTest", "All methods failed.")
+        return false
     }
 }
