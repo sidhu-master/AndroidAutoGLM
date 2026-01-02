@@ -48,8 +48,7 @@ import com.sidhu.androidautoglm.ui.VoiceReviewOverlay
  * - Hidden -> Visible: New task starts
  * - Visible -> TaskCompleted: Task finishes naturally
  * - TaskCompleted -> Hidden: User opens app
- * - Visible -> Dismissed: User manually stops task
- * - Dismissed -> Visible: New task starts (requires reset)
+ * - Visible -> Hidden: User stops task or window dismissed
  * - Visible <-> TemporarilyHidden: Screenshots/gestures
  * - Visible <-> RecordingOverlayShown: Voice recording
  * - RecordingOverlayShown <-> ReviewOverlayShown: Review recording
@@ -105,9 +104,6 @@ sealed class FloatingWindowState {
         val onSend: () -> Unit,
         val onCancel: () -> Unit
     ) : FloatingWindowState()
-
-    /** User explicitly dismissed the window via "Return to App" button */
-    data object Dismissed : FloatingWindowState()
 }
 
 class FloatingWindowController(private val context: Context) : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
@@ -150,14 +146,13 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
     private fun isValidTransition(from: FloatingWindowState, to: FloatingWindowState): Boolean {
         return when (from) {
             is FloatingWindowState.Hidden -> {
-                to is FloatingWindowState.Visible || to is FloatingWindowState.Dismissed
+                to is FloatingWindowState.Visible
             }
             is FloatingWindowState.Visible -> {
                 to is FloatingWindowState.Hidden ||
                 to is FloatingWindowState.TemporarilyHidden ||
                 to is FloatingWindowState.RecordingOverlayShown ||
                 to is FloatingWindowState.ReviewOverlayShown ||
-                to is FloatingWindowState.Dismissed ||
                 to is FloatingWindowState.TaskCompleted ||
                 to is FloatingWindowState.Visible  // Allow update
             }
@@ -169,9 +164,6 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
             }
             is FloatingWindowState.ReviewOverlayShown -> {
                 to is FloatingWindowState.Visible
-            }
-            is FloatingWindowState.Dismissed -> {
-                to is FloatingWindowState.Visible  // Only via resetForNewTask
             }
             is FloatingWindowState.TaskCompleted -> {
                 to is FloatingWindowState.Hidden
@@ -244,7 +236,7 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
      * Transition: Any state -> Visible (with task running)
      *
      * State Machine Rule: Starting a new task always transitions to Visible state,
-     * regardless of previous state (including Dismissed).
+     * regardless of previous state.
      *
      * For TaskCompleted state, we first transition to Hidden, then to Visible,
      * to maintain proper state machine transitions.
@@ -316,11 +308,6 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                 controllerScope.launch { setState(FloatingWindowState.Hidden) }
                 true
             }
-            is FloatingWindowState.Dismissed -> {
-                // User explicitly dismissed - keep Dismissed state, no transition needed
-                Log.d("FloatingWindow", "handleAppResumed: Window dismissed, keeping state")
-                false
-            }
             is FloatingWindowState.Hidden,
             is FloatingWindowState.TemporarilyHidden,
             is FloatingWindowState.RecordingOverlayShown,
@@ -347,7 +334,6 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
             }
             is FloatingWindowState.Hidden,
             is FloatingWindowState.TaskCompleted,
-            is FloatingWindowState.Dismissed,
             is FloatingWindowState.TemporarilyHidden,
             is FloatingWindowState.RecordingOverlayShown,
             is FloatingWindowState.ReviewOverlayShown -> {
@@ -522,18 +508,6 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                 }
             }
 
-            is FloatingWindowState.Dismissed -> {
-                // User explicitly dismissed - same as Hidden but prevents auto-show
-                if (isShowing && floatView != null) {
-                    floatingWindowManager.removeWindow(floatView)
-                    floatView = null
-                    lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
-                    lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
-                }
-                _stateFlow.value = newState
-                onComplete?.invoke()
-            }
-
             is FloatingWindowState.RecordingOverlayShown -> {
                 // Show recording overlay (not focusable)
                 showOverlayView(false) { RecordingOverlayContent() }
@@ -574,12 +548,6 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
      */
     suspend fun showAndWaitForLayout(onStop: () -> Unit, isRunning: Boolean = true) {
         val currentState = _stateFlow.value
-
-        // Don't show if dismissed
-        if (currentState is FloatingWindowState.Dismissed) {
-            Log.d("FloatingWindow", "showAndWaitForLayout() called but window is dismissed, skipping")
-            return
-        }
 
         if (currentState is FloatingWindowState.Visible) {
             // Already showing - update using unified method
@@ -731,7 +699,7 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
     }
 
     fun isOccupyingSpace(x: Float, y: Float): Boolean {
-        // Only occupy space if window is actually visible (not TemporarilyHidden or Dismissed)
+        // Only occupy space if window is actually visible (not TemporarilyHidden)
         if (_stateFlow.value !is FloatingWindowState.Visible) return false
         if (!isShowing || floatView == null || floatView?.visibility != android.view.View.VISIBLE) return false
 
@@ -784,15 +752,14 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
     }
 
     /**
-     * Dismisses the floating window and prevents it from auto-showing.
-     * This should be called when user explicitly dismisses the window.
-     * The window will not auto-show until resetForNewTask() is called.
+     * Dismisses the floating window and transitions to Hidden state.
+     * This should be called when user explicitly dismisses the window (e.g., via Stop button).
      * This suspend function waits for the window to be fully removed before returning.
      */
     suspend fun dismiss() = withContext(Dispatchers.Main) {
         Log.d("FloatingWindow", "dismiss() called")
         val completed = CompletableDeferred<Unit>()
-        setState(FloatingWindowState.Dismissed) {
+        setState(FloatingWindowState.Hidden) {
             completed.complete(Unit)
         }
         completed.await()
