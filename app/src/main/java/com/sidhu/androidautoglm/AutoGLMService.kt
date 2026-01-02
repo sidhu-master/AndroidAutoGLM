@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
@@ -65,17 +66,19 @@ class AutoGLMService : AccessibilityService() {
     }
     
     /**
-     * Shows the floating window. Creates the controller if needed.
+     * Shows the floating window and waits for layout to complete.
+     * This is more reliable than blind delay for ensuring window is ready for operations like screenshot.
+     *
      * @param onStop Optional callback when stop button is clicked
      * @param isRunning Whether the task is currently running (affects UI display)
      */
-    fun showFloatingWindow(onStop: () -> Unit, isRunning: Boolean = true) {
-        serviceScope.launch {
+    suspend fun showFloatingWindowAndWait(onStop: () -> Unit, isRunning: Boolean = true) {
+        withContext(Dispatchers.Main) {
             if (_floatingWindowController == null) {
                 _floatingWindowController = FloatingWindowController(this@AutoGLMService)
             }
-            Log.d("AutoGLMService", "showFloatingWindow called with isRunning=$isRunning")
-            _floatingWindowController?.show(onStop, isRunning)
+            Log.d("AutoGLMService", "showFloatingWindowAndWait called with isRunning=$isRunning")
+            _floatingWindowController?.showAndWaitForLayout(onStop, isRunning)
         }
     }
 

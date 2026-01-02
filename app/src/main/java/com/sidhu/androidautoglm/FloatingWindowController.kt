@@ -288,16 +288,27 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
     /**
      * Transitions to Hidden state when app is opened.
      * State Machine Rule: Hide window if task is not running or task is completed.
-     * 
+     *
      * @return true if transition occurred, false if window should stay visible
      */
     fun handleAppResumed(): Boolean {
         val currentState = _stateFlow.value
         return when (currentState) {
             is FloatingWindowState.Visible -> {
-                // Task is running - keep window visible
-                Log.d("FloatingWindow", "handleAppResumed: Task running, keeping window visible")
-                false
+                // Check if task is still running
+                if (currentState.isTaskRunning) {
+                    // Task is running - keep window visible
+                    Log.d("FloatingWindow", "handleAppResumed: Task running (${currentState.statusText}), keeping window visible")
+                    false
+                } else {
+                    // Task not running - hide window
+                    // This handles cases like:
+                    // - User requested microphone permission (no task started yet)
+                    // - Task was stopped but window hasn't been dismissed yet
+                    Log.d("FloatingWindow", "handleAppResumed: Task not running (${currentState.statusText}), hiding window")
+                    controllerScope.launch { setState(FloatingWindowState.Hidden) }
+                    true
+                }
             }
             is FloatingWindowState.TaskCompleted -> {
                 // Task completed - hide window
@@ -322,7 +333,8 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
 
     /**
      * Transitions to Visible state when app is backgrounded.
-     * State Machine Rule: Show window only if task is still running.
+     * State Machine Rule: Do NOT auto-show window. Window should only be shown
+     * when a task explicitly starts via showFloatingWindowAndWait().
      *
      * @return true if transition occurred, false otherwise
      */
@@ -333,22 +345,14 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                 // Already visible
                 false
             }
-            is FloatingWindowState.Hidden -> {
-                // Show window if we have a task in progress
-                // Use default status - caller should update via show()
-                Log.d("FloatingWindow", "handleAppPaused: Attempting to show window")
-                controllerScope.launch {
-                    val defaultStatus = context.getString(R.string.fw_ready)
-                    setState(FloatingWindowState.Visible(defaultStatus, true))
-                }
-                true
-            }
+            is FloatingWindowState.Hidden,
             is FloatingWindowState.TaskCompleted,
             is FloatingWindowState.Dismissed,
             is FloatingWindowState.TemporarilyHidden,
             is FloatingWindowState.RecordingOverlayShown,
             is FloatingWindowState.ReviewOverlayShown -> {
-                // In other states, don't show
+                // Don't auto-show - window should only be shown when a task starts
+                Log.d("FloatingWindow", "handleAppPaused: Not showing window (no active task)")
                 false
             }
         }
@@ -562,35 +566,40 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
     }
 
     /**
-     * Shows the floating window with the specified task running state.
+     * Shows the floating window and waits for layout to complete.
+     * This is more reliable than blind delay for ensuring window is ready for operations like screenshot.
+     *
      * @param onStop Callback when stop button is clicked
      * @param isRunning Whether the task is currently running (affects UI display)
      */
-    fun show(onStop: () -> Unit, isRunning: Boolean = true) {
-        // Launch in controllerScope since setState is a suspend function
-        controllerScope.launch {
-            val currentState = _stateFlow.value
+    suspend fun showAndWaitForLayout(onStop: () -> Unit, isRunning: Boolean = true) {
+        val currentState = _stateFlow.value
 
-            // Don't show if dismissed
-            if (currentState is FloatingWindowState.Dismissed) {
-                Log.d("FloatingWindow", "show() called but window is dismissed, skipping")
-                return@launch
-            }
-
-            if (currentState is FloatingWindowState.Visible) {
-                // Already showing - update using unified method
-                updateVisibleState(
-                    isTaskRunning = isRunning,
-                    onStopCallback = onStop,
-                    reason = "show"
-                )
-                return@launch
-            }
-
-            // Transition to Visible state with callback
-            val defaultStatus = context.getString(R.string.fw_ready)
-            setState(FloatingWindowState.Visible(defaultStatus, isRunning, onStop))
+        // Don't show if dismissed
+        if (currentState is FloatingWindowState.Dismissed) {
+            Log.d("FloatingWindow", "showAndWaitForLayout() called but window is dismissed, skipping")
+            return
         }
+
+        if (currentState is FloatingWindowState.Visible) {
+            // Already showing - update using unified method
+            updateVisibleState(
+                isTaskRunning = isRunning,
+                onStopCallback = onStop,
+                reason = "showAndWait"
+            )
+            // Already visible, no need to wait for layout
+            return
+        }
+
+        // Transition to Visible state and wait for layout
+        val defaultStatus = context.getString(R.string.fw_ready)
+        val layoutComplete = CompletableDeferred<Unit>()
+        setState(FloatingWindowState.Visible(defaultStatus, isRunning, onStop)) {
+            layoutComplete.complete(Unit)
+        }
+        layoutComplete.await()
+        Log.d("FloatingWindow", "showAndWaitForLayout: Window layout completed")
     }
 
     /**

@@ -358,8 +358,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         // Update UI state - explicitly clear error to avoid showing cancellation as error
         _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false, error = null)
-        val service = AutoGLMService.getInstance()
-        service?.updateFloatingStatus(getApplication<Application>().getString(R.string.status_stopped))
+        // Note: The floating window will be dismissed by the UI layer (FloatingWindowContent.kt)
+        // which also launches the main app after the window is fully hidden
     }
 
     fun clearMessages() {
@@ -488,20 +488,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     } else {
                         Log.d("AutoGLM_Trace", "App not in foreground, skipping goHome()")
                     }
-
-                    // Show floating window immediately after starting goHome
-                    // Note: takeScreenshot() will auto-hide the window via useWindowSuspension
-                    service.showFloatingWindow(
-                        onStop = { stopTask() },
-                        isRunning = true
-                    )
                 }
+
+                // Show floating window and wait for layout completion
+                // This is more reliable than blind delay - uses OnGlobalLayoutListener callback
+                Log.d("AutoGLM_Trace", "Showing floating window and waiting for layout")
+                service.showFloatingWindowAndWait(
+                    onStop = { stopTask() },
+                    isRunning = true
+                )
 
                 // Wait for goHome animation to complete (only if we executed goHome)
                 if (isAppInForeground) {
                     val animationDelay = DisplayUtils.getAnimationDelay(getApplication())
                     if (animationDelay > 0) {
-                        Log.d("AutoGLM_Trace", "Waiting for transition animation to complete: ${animationDelay}ms")
+                        Log.d("AutoGLM_Trace", "Waiting for goHome animation: ${animationDelay}ms")
                         delay(animationDelay)
                     } else {
                         Log.d("AutoGLM_Trace", "Animations disabled, skipping animation delay")
