@@ -16,6 +16,11 @@ dependencyResolutionManagement {
 
 rootProject.name = "AndroidAutoGLM"
 include(":app")
-include(":autoinput")
-project(":autoinput").projectDir = file("../autoinput")
+
+// 使用 composite build 引入 AutoInput
+includeBuild("../AutoInput") {
+    dependencySubstitution {
+        substitute(module("com.sidhu:autoinput")).using(project(":"))
+    }
+}
 

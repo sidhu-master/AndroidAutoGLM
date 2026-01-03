@@ -335,8 +335,9 @@ class TextInputHandler(private val service: AutoGLMService) {
                 visualInputSuccess = true
                 return true
             } else {
-                Log.w(TAG, "Keyboard Agent failed, falling back to legacy methods...")
+                Log.w(TAG, "Keyboard Agent failed, stopping.")
                 Log.d("VisualInputTest", "KeyboardAgent.type returned FALSE. Visual Input Failed.")
+                return false  // 视觉输入失败直接返回，不走 fallback
             }
         } else {
             Log.e(TAG, "Screenshot failed, skipping Visual Input. Falling back to legacy methods...")

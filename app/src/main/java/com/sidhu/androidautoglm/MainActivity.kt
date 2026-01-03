@@ -77,11 +77,12 @@ class MainActivity : ComponentActivity() {
         
         // Register Broadcast Receiver for background voice commands
         val filter = android.content.IntentFilter("com.sidhu.androidautoglm.ACTION_VOICE_COMMAND_BROADCAST")
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(voiceCommandReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(voiceCommandReceiver, filter)
-        }
+        androidx.core.content.ContextCompat.registerReceiver(
+            this,
+            voiceCommandReceiver,
+            filter,
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+        )
 
         setContent {
             MaterialTheme {
