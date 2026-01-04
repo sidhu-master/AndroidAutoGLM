@@ -243,6 +243,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // Debug Mode Flag - set to true to bypass permission checks and service requirements
     private val DEBUG_MODE = false
+    
+    // Debug Input Mode - set to true to test visual keyboard input with user's text
+    private val DEBUG_INPUT = false
 
     // Job to manage the current task lifecycle - allows cancellation
     private var currentTaskJob: kotlinx.coroutines.Job? = null
@@ -384,6 +387,29 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         Log.d("AutoGLM_Trace", "sendMessage called with text: $text")
         // Skip blank check
         if (text.isBlank()) return
+        
+        // Debug Input Mode: test visual keyboard input
+        if (DEBUG_INPUT) {
+            val service = AutoGLMService.getInstance()
+            if (service != null) {
+                viewModelScope.launch {
+                    Log.d("AutoGLM_Debug", "DEBUG_INPUT: Testing visual keyboard input with: $text")
+                    _uiState.value = _uiState.value.copy(isLoading = true)
+                    try {
+                        val textInputHandler = com.sidhu.androidautoglm.action.TextInputHandler(service)
+                        val success = textInputHandler.inputText(text)
+                        Log.d("AutoGLM_Debug", "DEBUG_INPUT: Visual input result: $success")
+                    } catch (e: Exception) {
+                        Log.e("AutoGLM_Debug", "DEBUG_INPUT: Error: ${e.message}", e)
+                    } finally {
+                        _uiState.value = _uiState.value.copy(isLoading = false)
+                    }
+                }
+            } else {
+                Log.e("AutoGLM_Debug", "DEBUG_INPUT: Service not available")
+            }
+            return
+        }
 
         // Ensure we have an active conversation
         if (_uiState.value.activeConversationId == null) {
