@@ -9,11 +9,15 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
@@ -65,17 +69,19 @@ class AutoGLMService : AccessibilityService() {
     }
     
     /**
-     * Shows the floating window. Creates the controller if needed.
+     * Shows the floating window and waits for layout to complete.
+     * This is more reliable than blind delay for ensuring window is ready for operations like screenshot.
+     *
      * @param onStop Optional callback when stop button is clicked
      * @param isRunning Whether the task is currently running (affects UI display)
      */
-    fun showFloatingWindow(onStop: () -> Unit, isRunning: Boolean = true) {
-        serviceScope.launch {
+    suspend fun showFloatingWindowAndWait(onStop: () -> Unit, isRunning: Boolean = true) {
+        withContext(Dispatchers.Main) {
             if (_floatingWindowController == null) {
                 _floatingWindowController = FloatingWindowController(this@AutoGLMService)
             }
-            Log.d("AutoGLMService", "showFloatingWindow called with isRunning=$isRunning")
-            _floatingWindowController?.show(onStop, isRunning)
+            Log.d("AutoGLMService", "showFloatingWindowAndWait called with isRunning=$isRunning")
+            _floatingWindowController?.showAndWaitForLayout(onStop, isRunning)
         }
     }
 
@@ -121,6 +127,33 @@ class AutoGLMService : AccessibilityService() {
 
     fun goHome() {
         performGlobalAction(GLOBAL_ACTION_HOME)
+    }
+
+    /**
+     * Waits for the current app to change after calling goHome().
+     * Returns true if the app changed (goHome took effect), false if timeout.
+     *
+     * @param timeoutMs Maximum time to wait for app change (default: 3000ms)
+     * @return true if app changed, false if timeout
+     */
+    suspend fun waitForAppChange(timeoutMs: Long = 3000): Boolean {
+        val previousApp = _currentApp.value
+        Log.d("AutoGLM_Trace", "waitForAppChange: waiting for change from $previousApp")
+
+        return withTimeoutOrNull(timeoutMs) {
+            currentApp
+                .drop(1) // Skip current value, wait for next change
+                .first { newApp ->
+                    val changed = newApp != previousApp
+                    if (changed) {
+                        Log.d("AutoGLM_Trace", "waitForAppChange: app changed from $previousApp to $newApp")
+                    }
+                    changed
+                }
+            true
+        } ?: false.also {
+            Log.w("AutoGLM_Trace", "waitForAppChange: timeout after ${timeoutMs}ms, app still $previousApp")
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {

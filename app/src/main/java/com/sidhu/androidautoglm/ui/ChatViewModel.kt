@@ -16,6 +16,8 @@ import com.sidhu.androidautoglm.network.Message
 import com.sidhu.androidautoglm.network.ModelClient
 import com.sidhu.androidautoglm.AutoGLMService
 import com.sidhu.androidautoglm.R
+import com.sidhu.androidautoglm.utils.AppStateTracker
+import com.sidhu.androidautoglm.utils.DisplayUtils
 import com.sidhu.androidautoglm.data.TaskEndState
 import com.sidhu.androidautoglm.data.entity.Conversation as DbConversation
 import java.text.SimpleDateFormat
@@ -359,8 +361,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         // Update UI state - explicitly clear error to avoid showing cancellation as error
         _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false, error = null)
+
+        // Notify floating window controller that task is no longer running
+        // This ensures isTaskRunning flag is properly synchronized before dismissal
         val service = AutoGLMService.getInstance()
-        service?.updateFloatingStatus(getApplication<Application>().getString(R.string.status_stopped))
+        service?.floatingWindowController?.setTaskRunning(false)
+
+        // Note: The floating window will be dismissed by the UI layer (FloatingWindowContent.kt)
+        // which also launches the main app after the window is fully hidden
     }
 
     fun clearMessages() {
@@ -495,32 +503,43 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var currentPrompt = text
             var step = 0
             val maxSteps = 20
-            
+
             if (!DEBUG_MODE && service != null) {
                 // Reset floating window state for new task
                 service.resetFloatingWindowForNewTask()
 
-                // Show floating window and minimize app
+                // Check if app is in foreground
+                val isAppInForeground = AppStateTracker.isAppInForeground(getApplication())
+                Log.d("AutoGLM_Trace", "App in foreground: $isAppInForeground")
+
                 withContext(Dispatchers.Main) {
-                    service.showFloatingWindow(
-                        onStop = { stopTask() },
-                        isRunning = true
-                    )
-
-                    // Only go home (minimize) if we are currently in the app
-                    // If we are using floating window over another app, we shouldn't go home
-                    val currentPkg = service.currentApp.value
-                    val myPkg = getApplication<Application>().packageName
-                    Log.d("AutoGLM_Trace", "goHome check: currentPkg=$currentPkg, myPkg=$myPkg")
-
-                    if (currentPkg == myPkg || currentPkg == null) {
-                        Log.d("AutoGLM_Trace", "Executing goHome()")
+                    // Only go home if this app is in the foreground
+                    if (isAppInForeground) {
+                        Log.d("AutoGLM_Trace", "App is in foreground, executing goHome()")
                         service.goHome()
                     } else {
-                        Log.d("AutoGLM_Trace", "Skipping goHome()")
+                        Log.d("AutoGLM_Trace", "App not in foreground, skipping goHome()")
                     }
                 }
-                delay(1000) // Wait for animation and window to appear
+
+                // Show floating window and wait for layout completion
+                // This is more reliable than blind delay - uses OnGlobalLayoutListener callback
+                Log.d("AutoGLM_Trace", "Showing floating window and waiting for layout")
+                service.showFloatingWindowAndWait(
+                    onStop = { stopTask() },
+                    isRunning = true
+                )
+
+                // Wait for goHome animation to complete (only if we executed goHome)
+                if (isAppInForeground) {
+                    val animationDelay = DisplayUtils.getAnimationDelay(getApplication())
+                    if (animationDelay > 0) {
+                        Log.d("AutoGLM_Trace", "Waiting for goHome animation: ${animationDelay}ms")
+                        delay(animationDelay)
+                    } else {
+                        Log.d("AutoGLM_Trace", "Animations disabled, skipping animation delay")
+                    }
+                }
             }
 
             var isFinished = false
@@ -676,7 +695,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     isLoading = false,
                     error = null  // Explicitly clear any error
                 )
-                service?.updateFloatingStatus(getApplication<Application>().getString(R.string.status_stopped))
+                // Note: Do NOT call updateFloatingStatus() here as it creates a race condition
+                // where isTaskRunning stays true while status shows "stopped", preventing
+                // the window from hiding when app resumes. The window dismissal is handled
+                // by the FloatingWindowContent.kt stop button onClick handler.
                 updateTaskState(TaskEndState.USER_STOPPED, step)
             } catch (e: Exception) {
                 e.printStackTrace()
