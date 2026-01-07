@@ -247,7 +247,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val DEBUG_MODE = false
     
     // Debug Input Mode - set to true to test visual keyboard input with user's text
-    private val DEBUG_INPUT = false
+    private val DEBUG_INPUT = true
 
     // Job to manage the current task lifecycle - allows cancellation
     private var currentTaskJob: kotlinx.coroutines.Job? = null

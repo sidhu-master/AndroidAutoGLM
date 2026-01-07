@@ -55,9 +55,6 @@ class AutoGLMService : AccessibilityService() {
         // Initialize controllers
         _floatingWindowController = FloatingWindowController(this)
         _animationController = AnimationController(this)
-        
-        // 预加载分词器
-        com.sidhu.autoinput.ChineseSegmenter.preload()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
