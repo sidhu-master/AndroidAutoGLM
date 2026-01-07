@@ -504,13 +504,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var step = 0
             val maxSteps = 20
 
+            // Check if app is in foreground (used for both goHome and screenshot decisions)
+            val isAppInForeground = if (DEBUG_MODE) false else AppStateTracker.isAppInForeground(getApplication())
+            Log.d("AutoGLM_Trace", "App in foreground: $isAppInForeground")
+
             if (!DEBUG_MODE && service != null) {
                 // Reset floating window state for new task
                 service.resetFloatingWindowForNewTask()
-
-                // Check if app is in foreground
-                val isAppInForeground = AppStateTracker.isAppInForeground(getApplication())
-                Log.d("AutoGLM_Trace", "App in foreground: $isAppInForeground")
 
                 withContext(Dispatchers.Main) {
                     // Only go home if this app is in the foreground
@@ -529,17 +529,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     onStop = { stopTask() },
                     isRunning = true
                 )
-
-                // Wait for goHome animation to complete (only if we executed goHome)
-                if (isAppInForeground) {
-                    val animationDelay = DisplayUtils.getAnimationDelay(getApplication())
-                    if (animationDelay > 0) {
-                        Log.d("AutoGLM_Trace", "Waiting for goHome animation: ${animationDelay}ms")
-                        delay(animationDelay)
-                    } else {
-                        Log.d("AutoGLM_Trace", "Animations disabled, skipping animation delay")
-                    }
-                }
             }
 
             var isFinished = false
@@ -554,28 +543,37 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     // 1. Take Screenshot
-                    Log.d("AutoGLM_Debug", "Taking screenshot...")
-                    val screenshot = if (DEBUG_MODE) {
-                        Bitmap.createBitmap(1080, 2400, Bitmap.Config.ARGB_8888)
+                    // Skip screenshot on first step if the request was initiated from our own app
+                    val screenshot = if (step == 1 && isAppInForeground) {
+                        Log.d("AutoGLM_Debug", "Step 1: Skipping screenshot (app in foreground)")
+                        null
                     } else {
-                        service?.takeScreenshot()
+                        Log.d("AutoGLM_Debug", "Taking screenshot for step $step...")
+                        if (DEBUG_MODE) {
+                            Bitmap.createBitmap(1080, 2400, Bitmap.Config.ARGB_8888)
+                        } else {
+                            service?.takeScreenshot()
+                        }
                     }
 
-                    if (screenshot == null) {
+                    // Check screenshot failure (only if we expected to take one)
+                    if (screenshot == null && !(step == 1 && isAppInForeground)) {
                         Log.e("AutoGLM_Debug", "Screenshot failed")
                         postError(getApplication<Application>().getString(R.string.error_screenshot_failed))
                         break
                     }
-                    Log.d("AutoGLM_Debug", "Screenshot taken: ${screenshot.width}x${screenshot.height}")
 
-                    // Use service dimensions for consistency with coordinate system
-                    val screenWidth = if (DEBUG_MODE) 1080 else service?.getScreenWidth() ?: 1080
-                    val screenHeight = if (DEBUG_MODE) 2400 else service?.getScreenHeight() ?: 2400
+                    // Log screenshot success
+                    if (screenshot != null) {
+                        Log.d("ChatViewModel", "Screenshot size: ${screenshot.width}x${screenshot.height}")
+                    }
 
-                    Log.d("ChatViewModel", "Screenshot size: ${screenshot.width}x${screenshot.height}")
-                    Log.d("ChatViewModel", "Service screen size: ${screenWidth}x${screenHeight}")
+                    // 2. Get screen dimensions for ActionParser coordinate system
+                    val screenWidth = if (DEBUG_MODE) 1080 else DisplayUtils.getScreenWidth(getApplication())
+                    val screenHeight = if (DEBUG_MODE) 2400 else DisplayUtils.getScreenHeight(getApplication())
+                    Log.d("ChatViewModel", "Screen size: ${screenWidth}x${screenHeight}")
 
-                    // 2. Build User Message
+                    // 3. Build User Message
                     val currentApp = if (DEBUG_MODE) "DebugApp" else (service?.currentApp?.value ?: "Unknown")
                     val screenInfo = "{\"current_app\": \"$currentApp\"}"
 
@@ -586,8 +584,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     val userContentItems = mutableListOf<ContentItem>()
-                    // Doubao/OpenAI vision models often prefer Image first, then Text
-                    userContentItems.add(ContentItem("image_url", imageUrl = ImageUrl("data:image/png;base64,${ModelClient.bitmapToBase64(screenshot)}")))
+                    // Only add image if we have a screenshot (subsequent steps)
+                    if (screenshot != null) {
+                        // Doubao/OpenAI vision models often prefer Image first, then Text
+                        userContentItems.add(ContentItem("image_url", imageUrl = ImageUrl("data:image/png;base64,${ModelClient.bitmapToBase64(screenshot)}")))
+                    }
                     userContentItems.add(ContentItem("text", text = textPrompt))
 
                     val userMessage = Message("user", userContentItems)
