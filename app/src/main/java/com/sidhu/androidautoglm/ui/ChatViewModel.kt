@@ -147,13 +147,19 @@ data class UiMessage(
     val role: String,
     val content: String,
     val image: Bitmap? = null,
-    val formattedContent: FormattedContent? = null
+    val formattedContent: FormattedContent? = null,
+    val timestamp: Long = 0L
 )
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState = _uiState.asStateFlow()
+
+    private val pendingMessagesByConversationId = MutableStateFlow<Map<Long, List<UiMessage>>>(emptyMap())
+
+    private fun messageKey(message: UiMessage): Triple<String, String, Long> =
+        Triple(message.role, message.content, message.timestamp)
 
     private var modelClient: ModelClient? = null
 
@@ -221,13 +227,44 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 .flatMapLatest { conversationId ->
                     if (conversationId != null) {
                         repository.getMessagesWithImagesFlow(conversationId)
-                            .map { messagesWithImages -> messagesWithImages.toUiMessages(getApplication()) }
+                            .map { messagesWithImages ->
+                                conversationId to messagesWithImages.toUiMessages(getApplication())
+                            }
                     } else {
-                        flowOf(emptyList())
+                        flowOf(null to emptyList())
                     }
                 }
-                .collect { messages ->
-                    _uiState.value = _uiState.value.copy(messages = messages)
+                .collect { (conversationId, dbMessages) ->
+                    if (conversationId == null) {
+                        return@collect
+                    }
+
+                    val placeholderId = -1L
+                    val mapBefore = pendingMessagesByConversationId.value
+                    val placeholderPending = mapBefore[placeholderId].orEmpty()
+                    if (placeholderPending.isNotEmpty()) {
+                        pendingMessagesByConversationId.value = mapBefore.toMutableMap().apply {
+                            this[conversationId] = (this[conversationId].orEmpty() + placeholderPending)
+                            remove(placeholderId)
+                        }
+                    }
+
+                    val pending = pendingMessagesByConversationId.value[conversationId].orEmpty()
+                    val dbKeys = dbMessages.asSequence().map(::messageKey).toHashSet()
+                    val remainingPending = pending.filterNot { dbKeys.contains(messageKey(it)) }
+
+                    if (remainingPending.size != pending.size) {
+                        val newMap = pendingMessagesByConversationId.value.toMutableMap()
+                        if (remainingPending.isEmpty()) {
+                            newMap.remove(conversationId)
+                        } else {
+                            newMap[conversationId] = remainingPending
+                        }
+                        pendingMessagesByConversationId.value = newMap
+                    }
+
+                    val merged = (dbMessages + remainingPending).sortedBy { it.timestamp }
+                    _uiState.value = _uiState.value.copy(messages = merged)
                 }
         }
 
@@ -245,9 +282,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // Debug Mode Flag - set to true to bypass permission checks and service requirements
     private val DEBUG_MODE = false
-    
-    // Debug Input Mode - set to true to test visual keyboard input with user's text
-    private val DEBUG_INPUT = true
 
     // Job to manage the current task lifecycle - allows cancellation
     private var currentTaskJob: kotlinx.coroutines.Job? = null
@@ -396,15 +430,33 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Skip blank check
         if (text.isBlank()) return
         
-        // Debug Input Mode: test visual keyboard input
-        if (DEBUG_INPUT) {
+        com.sidhu.autoinput.KeyboardScanner.setDebugEnabled(BuildConfig.AUTO_INPUT_DEV_MODE)
+
+        if (BuildConfig.AUTO_INPUT_DEV_MODE) {
             val service = AutoGLMService.getInstance()
             if (service != null) {
                 viewModelScope.launch {
                     Log.d("AutoGLM_Debug", "DEBUG_INPUT: Testing visual keyboard input with: $text")
                     _uiState.value = _uiState.value.copy(isLoading = true)
                     try {
+                        // Ensure conversation exists for debug logs
+                        val conversationId = _uiState.value.activeConversationId ?: conversationUseCase.createConversation().also { 
+                            _uiState.value = _uiState.value.copy(activeConversationId = it)
+                        }
+
                         val textInputHandler = com.sidhu.androidautoglm.action.TextInputHandler(service)
+                        
+                        // Add debug listener to post screenshots to chat
+                        textInputHandler.setDebugListener { bitmap, info ->
+                            viewModelScope.launch {
+                                 repository.saveAssistantMessage(
+                                     conversationId,
+                                     "Keyboard Debug:\n$info",
+                                     bitmap
+                                 )
+                            }
+                        }
+
                         val success = textInputHandler.inputText(text)
                         Log.d("AutoGLM_Debug", "DEBUG_INPUT: Visual input result: $success")
                     } catch (e: Exception) {
@@ -417,14 +469,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 Log.e("AutoGLM_Debug", "DEBUG_INPUT: Service not available")
             }
             return
-        }
-
-        // Ensure we have an active conversation
-        if (_uiState.value.activeConversationId == null) {
-            viewModelScope.launch {
-                val conversationId = conversationUseCase.createConversation()
-                _uiState.value = _uiState.value.copy(activeConversationId = conversationId)
-            }
         }
 
         if (modelClient == null) {
@@ -470,8 +514,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Create a new Job for this task - allows cancellation via stopTask()
         currentTaskJob = kotlinx.coroutines.Job()
 
+        val userTimestamp = System.currentTimeMillis()
+        val pendingConversationId = _uiState.value.activeConversationId ?: -1L
+        val userMessage = UiMessage(
+            role = "user",
+            content = text,
+            formattedContent = FormattedContent.TextContent(text),
+            timestamp = userTimestamp
+        )
+        pendingMessagesByConversationId.value =
+            pendingMessagesByConversationId.value.toMutableMap().apply {
+                this[pendingConversationId] = (this[pendingConversationId].orEmpty() + userMessage)
+            }
+
         _uiState.value = _uiState.value.copy(
-            messages = _uiState.value.messages + UiMessage("user", text),
+            messages = _uiState.value.messages + userMessage,
             isLoading = true,
             isRunning = true,
             error = null
@@ -483,10 +540,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // Refresh app mapping before each request
             AppMapper.refreshLauncherApps()
 
+            val ensuredConversationId = _uiState.value.activeConversationId ?: run {
+                val createdId = conversationUseCase.createConversation()
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(activeConversationId = createdId)
+                    preferencesManager.saveCurrentConversationId(createdId)
+                }
+                createdId
+            }
+
             // Save user message to database
-            if (_uiState.value.activeConversationId != null) {
+            if (ensuredConversationId != -1L) {
                 try {
-                    repository.saveUserMessage(_uiState.value.activeConversationId!!, text)
+                    repository.saveUserMessage(ensuredConversationId, text, userTimestamp)
                 } catch (e: Exception) {
                     Log.e("ChatViewModel", "Failed to save user message", e)
                 }
@@ -587,7 +653,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     // Only add image if we have a screenshot (subsequent steps)
                     if (screenshot != null) {
                         // Doubao/OpenAI vision models often prefer Image first, then Text
-                        userContentItems.add(ContentItem("image_url", imageUrl = ImageUrl("data:image/png;base64,${ModelClient.bitmapToBase64(screenshot)}")))
+                        userContentItems.add(ContentItem("image_url", imageUrl = ImageUrl("data:image/jpeg;base64,${ModelClient.bitmapToBase64(screenshot)}")))
                     }
                     userContentItems.add(ContentItem("text", text = textPrompt))
 
@@ -637,7 +703,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     _uiState.value = _uiState.value.copy(
-                        messages = _uiState.value.messages + UiMessage("assistant", unescapedResponseText)
+                        messages = _uiState.value.messages + UiMessage(
+                            role = "assistant",
+                            content = unescapedResponseText,
+                            timestamp = System.currentTimeMillis()
+                        )
                     )
 
                     // If DEBUG_MODE, stop here after one round

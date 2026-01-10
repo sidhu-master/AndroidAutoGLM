@@ -9,6 +9,12 @@ class ActionExecutor(private val service: AutoGLMService) {
 
     private val textInputHandler = TextInputHandler(service)
 
+    fun setDebugListener(listener: ((android.graphics.Bitmap, String) -> Unit)?) {
+        if (listener != null) {
+            textInputHandler.setDebugListener(listener)
+        }
+    }
+
     suspend fun execute(action: Action): Boolean {
         return when (action) {
             is Action.Tap -> {

@@ -149,14 +149,15 @@ class ConversationRepository(
      */
     suspend fun saveUserMessage(
         conversationId: Long,
-        content: String
+        content: String,
+        timestamp: Long = System.currentTimeMillis()
     ): Long {
         val message = Message(
             conversationId = conversationId,
             role = "user",
             content = content,
             imagePath = null,
-            timestamp = System.currentTimeMillis()
+            timestamp = timestamp
         )
 
         val messageId = messageDao.insertMessage(message)

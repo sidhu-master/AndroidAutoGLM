@@ -246,6 +246,14 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
         controllerScope.launch {
             Log.d("FloatingWindow", "resetForNewTask() called, current state: ${_stateFlow.value}")
             val defaultStatus = context.getString(R.string.fw_ready)
+            val preservedOnStopCallback = when (val s = _stateFlow.value) {
+                is FloatingWindowState.Visible -> s.onStopCallback
+                is FloatingWindowState.TemporarilyHidden -> s.cachedOnStopCallback
+                is FloatingWindowState.RecordingOverlayShown -> s.underlyingState.onStopCallback
+                is FloatingWindowState.ReviewOverlayShown -> s.underlyingState.onStopCallback
+                is FloatingWindowState.Hidden,
+                is FloatingWindowState.TaskCompleted -> null
+            }
 
             // Handle TaskCompleted state by first transitioning to Hidden
             if (_stateFlow.value is FloatingWindowState.TaskCompleted) {
@@ -253,7 +261,7 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
             }
 
             // Now transition to Visible state with task running
-            setState(FloatingWindowState.Visible(defaultStatus, true))
+            setState(FloatingWindowState.Visible(defaultStatus, true, preservedOnStopCallback))
         }
     }
 
@@ -371,6 +379,7 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
 
         when (newState) {
             is FloatingWindowState.Hidden -> {
+                hideOverlayView()
                 // Remove window from WindowManager
                 if (isShowing && floatView != null) {
                     floatingWindowManager.removeWindow(floatView)
@@ -429,8 +438,10 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                                                             activityIntent.action = "ACTION_VOICE_SEND"
                                                             activityIntent.putExtra("voice_text", text)
                                                             activityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                                                            context.startActivity(activityIntent)
-                                                            controllerScope.launch { removeAndHide() }
+                                                            controllerScope.launch {
+                                                                forceDismiss()
+                                                                context.startActivity(activityIntent)
+                                                            }
                                                         }
                                                     } catch (e: Exception) {
                                                         e.printStackTrace()
@@ -448,9 +459,16 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                                 }
                             },
                             onDrag = { x: Float, y: Float ->
-                                windowParams.x += x.roundToInt()
-                                windowParams.y -= y.roundToInt()
-                                floatingWindowManager.updateWindowLayout(floatView, windowParams)
+                                val view = floatView
+                                if (view != null) {
+                                    val screenWidth = DisplayUtils.getScreenWidth(context)
+                                    val screenHeight = DisplayUtils.getScreenHeight(context)
+                                    val maxX = (screenWidth - view.width).coerceAtLeast(0)
+                                    val maxY = (screenHeight - view.height).coerceAtLeast(0)
+                                    windowParams.x = (windowParams.x + x.roundToInt()).coerceIn(0, maxX)
+                                    windowParams.y = (windowParams.y - y.roundToInt()).coerceIn(0, maxY)
+                                    floatingWindowManager.updateWindowLayout(view, windowParams)
+                                }
                             }
                         )
                     }
@@ -787,6 +805,19 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
             completed.complete(Unit)
         }
         completed.await()
+    }
+
+    suspend fun forceDismiss() = stateMutex.withLock {
+        withContext(Dispatchers.Main) {
+            hideOverlayView()
+            if (isShowing && floatView != null) {
+                floatingWindowManager.removeWindow(floatView)
+                floatView = null
+                lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+                lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+            }
+            _stateFlow.value = FloatingWindowState.Hidden
+        }
     }
 
     override val lifecycle

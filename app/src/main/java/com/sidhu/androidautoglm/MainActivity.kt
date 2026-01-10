@@ -26,8 +26,10 @@ import com.sidhu.androidautoglm.utils.UpdateManager
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
+import kotlinx.coroutines.launch
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
@@ -211,10 +213,13 @@ class MainActivity : ComponentActivity() {
             if (service != null) {
                 when (event) {
                     androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
-                        // Use state machine to handle app resume
-                        // State machine will decide whether to hide window based on current state
-                        val hidden = service.floatingWindowController?.handleAppResumed() ?: false
-                        Log.d("MainActivity", "ON_RESUME: Window hidden=$hidden")
+                        val state = viewModel.uiState.value
+                        if (state.isRunning || state.isLoading) {
+                            viewModel.stopTask()
+                        }
+                        lifecycleScope.launch {
+                            service.floatingWindowController?.forceDismiss()
+                        }
                     }
                     androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
                         // Use state machine to handle app pause
