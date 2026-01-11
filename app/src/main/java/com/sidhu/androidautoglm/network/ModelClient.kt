@@ -378,8 +378,7 @@ class ModelClient(
             }
 
             val outputStream = ByteArrayOutputStream()
-            // Switch to JPEG with 70% quality to reduce payload size and avoid 500 errors
-            finalBitmap.compress(Bitmap.CompressFormat.JPEG, 70, outputStream)
+            finalBitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
             val bytes = outputStream.toByteArray()
             Log.d("AutoGLM_Debug", "Image Base64 size: ${bytes.size / 1024} KB")
             return Base64.encodeToString(bytes, Base64.NO_WRAP)

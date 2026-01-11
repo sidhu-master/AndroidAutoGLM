@@ -26,8 +26,10 @@ import com.sidhu.androidautoglm.utils.UpdateManager
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
+import kotlinx.coroutines.launch
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
@@ -77,11 +79,12 @@ class MainActivity : ComponentActivity() {
         
         // Register Broadcast Receiver for background voice commands
         val filter = android.content.IntentFilter("com.sidhu.androidautoglm.ACTION_VOICE_COMMAND_BROADCAST")
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(voiceCommandReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(voiceCommandReceiver, filter)
-        }
+        androidx.core.content.ContextCompat.registerReceiver(
+            this,
+            voiceCommandReceiver,
+            filter,
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+        )
 
         setContent {
             MaterialTheme {
@@ -210,10 +213,13 @@ class MainActivity : ComponentActivity() {
             if (service != null) {
                 when (event) {
                     androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
-                        // Use state machine to handle app resume
-                        // State machine will decide whether to hide window based on current state
-                        val hidden = service.floatingWindowController?.handleAppResumed() ?: false
-                        Log.d("MainActivity", "ON_RESUME: Window hidden=$hidden")
+                        val state = viewModel.uiState.value
+                        if (state.isRunning || state.isLoading) {
+                            viewModel.stopTask()
+                        }
+                        lifecycleScope.launch {
+                            service.floatingWindowController?.forceDismiss()
+                        }
                     }
                     androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
                         // Use state machine to handle app pause

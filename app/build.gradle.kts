@@ -62,8 +62,8 @@ android {
         applicationId = "com.sidhu.androidautoglm"
         minSdk = 30
         targetSdk = 34
-        versionCode = 6
-        versionName = "1.0.5"
+        versionCode = 7
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -74,7 +74,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("Boolean", "AUTO_INPUT_DEV_MODE", "false")
+        }
         release {
+            buildConfigField("Boolean", "AUTO_INPUT_DEV_MODE", "false")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -97,11 +101,12 @@ android {
         kotlinCompilerExtensionVersion = "1.5.4"
     }
     packaging {
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-        }
         jniLibs {
             useLegacyPackaging = true
+            pickFirsts += setOf("**/libonnxruntime.so")
+        }
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
 }
@@ -150,4 +155,8 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    // implementation("com.sidhu:autoinput")
+    implementation("com.sidhu.autoinput:library:1.1.1")
+    implementation(files("libs/sherpa-onnx-1.12.20.aar"))
 }

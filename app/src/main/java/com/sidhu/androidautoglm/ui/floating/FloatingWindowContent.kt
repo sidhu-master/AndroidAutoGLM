@@ -180,7 +180,10 @@ fun FloatingWindowContent(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    val isError = status.startsWith("Error") || status.startsWith("出错") || status.startsWith("运行异常")
+                    val isError = status.startsWith("Error") ||
+                        status.startsWith("出错") ||
+                        status.startsWith("运行异常") ||
+                        status.startsWith("未输入正确的文本")
                     val titleText = when {
                         isTaskRunning -> stringResource(R.string.fw_running)
                         isError -> stringResource(R.string.fw_error_title)
@@ -199,13 +202,13 @@ fun FloatingWindowContent(
                     )
                     Text(
                         text = status,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         maxLines = 1
                     )
                 }
 
                 // Right side action button
-                if (isTaskRunning) {
+                if (isTaskRunning || onStopCallback != null) {
                      Button(
                         onClick = {
                             // Stop button clicked - launch coroutine to properly sequence operations
@@ -294,15 +297,18 @@ fun FloatingWindowContent(
                                         // Check permission
                                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                                             Toast.makeText(context, context.getString(R.string.requesting_microphone_permission_toast), Toast.LENGTH_SHORT).show()
-                                            try {
-                                                val intent = Intent(context, com.sidhu.androidautoglm.MainActivity::class.java).apply {
-                                                    action = "ACTION_REQUEST_MIC_PERMISSION"
-                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            scope.launch {
+                                                try {
+                                                    floatingWindowController.forceDismiss()
+                                                    val intent = Intent(context, com.sidhu.androidautoglm.MainActivity::class.java).apply {
+                                                        action = "ACTION_REQUEST_MIC_PERMISSION"
+                                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                                                    }
+                                                    context.startActivity(intent)
+                                                } catch (e: Exception) {
+                                                    e.printStackTrace()
+                                                    Toast.makeText(context, context.getString(R.string.failed_launch_permission_toast), Toast.LENGTH_SHORT).show()
                                                 }
-                                                context.startActivity(intent)
-                                            } catch (e: Exception) {
-                                                e.printStackTrace()
-                                                Toast.makeText(context, context.getString(R.string.failed_launch_permission_toast), Toast.LENGTH_SHORT).show()
                                             }
                                             return@awaitEachGesture
                                         }
@@ -382,17 +388,19 @@ fun FloatingWindowContent(
                         // Return Button
                         Button(
                             onClick = {
-                                // Launch the main app
-                                try {
-                                    val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-                                    if (intent != null) {
-                                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                        context.startActivity(intent)
-                                    } else {
-                                        Log.e("FloatingWindow", "Launch intent not found")
+                                scope.launch {
+                                    try {
+                                        floatingWindowController.forceDismiss()
+                                        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                                        if (intent != null) {
+                                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                                            context.startActivity(intent)
+                                        } else {
+                                            Log.e("FloatingWindow", "Launch intent not found")
+                                        }
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
                                     }
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(

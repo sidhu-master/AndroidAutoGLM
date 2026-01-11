@@ -16,6 +16,8 @@ import com.sidhu.androidautoglm.network.Message
 import com.sidhu.androidautoglm.network.ModelClient
 import com.sidhu.androidautoglm.AutoGLMService
 import com.sidhu.androidautoglm.R
+import com.sidhu.androidautoglm.utils.AppStateTracker
+import com.sidhu.androidautoglm.utils.DisplayUtils
 import com.sidhu.androidautoglm.data.TaskEndState
 import com.sidhu.androidautoglm.data.entity.Conversation as DbConversation
 import java.text.SimpleDateFormat
@@ -145,13 +147,19 @@ data class UiMessage(
     val role: String,
     val content: String,
     val image: Bitmap? = null,
-    val formattedContent: FormattedContent? = null
+    val formattedContent: FormattedContent? = null,
+    val timestamp: Long = 0L
 )
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState = _uiState.asStateFlow()
+
+    private val pendingMessagesByConversationId = MutableStateFlow<Map<Long, List<UiMessage>>>(emptyMap())
+
+    private fun messageKey(message: UiMessage): Triple<String, String, Long> =
+        Triple(message.role, message.content, message.timestamp)
 
     private var modelClient: ModelClient? = null
 
@@ -219,13 +227,44 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 .flatMapLatest { conversationId ->
                     if (conversationId != null) {
                         repository.getMessagesWithImagesFlow(conversationId)
-                            .map { messagesWithImages -> messagesWithImages.toUiMessages(getApplication()) }
+                            .map { messagesWithImages ->
+                                conversationId to messagesWithImages.toUiMessages(getApplication())
+                            }
                     } else {
-                        flowOf(emptyList())
+                        flowOf(null to emptyList())
                     }
                 }
-                .collect { messages ->
-                    _uiState.value = _uiState.value.copy(messages = messages)
+                .collect { (conversationId, dbMessages) ->
+                    if (conversationId == null) {
+                        return@collect
+                    }
+
+                    val placeholderId = -1L
+                    val mapBefore = pendingMessagesByConversationId.value
+                    val placeholderPending = mapBefore[placeholderId].orEmpty()
+                    if (placeholderPending.isNotEmpty()) {
+                        pendingMessagesByConversationId.value = mapBefore.toMutableMap().apply {
+                            this[conversationId] = (this[conversationId].orEmpty() + placeholderPending)
+                            remove(placeholderId)
+                        }
+                    }
+
+                    val pending = pendingMessagesByConversationId.value[conversationId].orEmpty()
+                    val dbKeys = dbMessages.asSequence().map(::messageKey).toHashSet()
+                    val remainingPending = pending.filterNot { dbKeys.contains(messageKey(it)) }
+
+                    if (remainingPending.size != pending.size) {
+                        val newMap = pendingMessagesByConversationId.value.toMutableMap()
+                        if (remainingPending.isEmpty()) {
+                            newMap.remove(conversationId)
+                        } else {
+                            newMap[conversationId] = remainingPending
+                        }
+                        pendingMessagesByConversationId.value = newMap
+                    }
+
+                    val merged = (dbMessages + remainingPending).sortedBy { it.timestamp }
+                    _uiState.value = _uiState.value.copy(messages = merged)
                 }
         }
 
@@ -356,8 +395,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         // Update UI state - explicitly clear error to avoid showing cancellation as error
         _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false, error = null)
+
+        // Notify floating window controller that task is no longer running
+        // This ensures isTaskRunning flag is properly synchronized before dismissal
         val service = AutoGLMService.getInstance()
-        service?.updateFloatingStatus(getApplication<Application>().getString(R.string.status_stopped))
+        service?.floatingWindowController?.setTaskRunning(false)
+
+        // Note: The floating window will be dismissed by the UI layer (FloatingWindowContent.kt)
+        // which also launches the main app after the window is fully hidden
     }
 
     fun clearMessages() {
@@ -384,13 +429,46 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         Log.d("AutoGLM_Trace", "sendMessage called with text: $text")
         // Skip blank check
         if (text.isBlank()) return
+        
+        com.sidhu.autoinput.KeyboardScanner.setDebugEnabled(BuildConfig.AUTO_INPUT_DEV_MODE)
 
-        // Ensure we have an active conversation
-        if (_uiState.value.activeConversationId == null) {
-            viewModelScope.launch {
-                val conversationId = conversationUseCase.createConversation()
-                _uiState.value = _uiState.value.copy(activeConversationId = conversationId)
+        if (BuildConfig.AUTO_INPUT_DEV_MODE) {
+            val service = AutoGLMService.getInstance()
+            if (service != null) {
+                viewModelScope.launch {
+                    Log.d("AutoGLM_Debug", "DEBUG_INPUT: Testing visual keyboard input with: $text")
+                    _uiState.value = _uiState.value.copy(isLoading = true)
+                    try {
+                        // Ensure conversation exists for debug logs
+                        val conversationId = _uiState.value.activeConversationId ?: conversationUseCase.createConversation().also { 
+                            _uiState.value = _uiState.value.copy(activeConversationId = it)
+                        }
+
+                        val textInputHandler = com.sidhu.androidautoglm.action.TextInputHandler(service)
+                        
+                        // Add debug listener to post screenshots to chat
+                        textInputHandler.setDebugListener { bitmap, info ->
+                            viewModelScope.launch {
+                                 repository.saveAssistantMessage(
+                                     conversationId,
+                                     "Keyboard Debug:\n$info",
+                                     bitmap
+                                 )
+                            }
+                        }
+
+                        val success = textInputHandler.inputText(text)
+                        Log.d("AutoGLM_Debug", "DEBUG_INPUT: Visual input result: $success")
+                    } catch (e: Exception) {
+                        Log.e("AutoGLM_Debug", "DEBUG_INPUT: Error: ${e.message}", e)
+                    } finally {
+                        _uiState.value = _uiState.value.copy(isLoading = false)
+                    }
+                }
+            } else {
+                Log.e("AutoGLM_Debug", "DEBUG_INPUT: Service not available")
             }
+            return
         }
 
         if (modelClient == null) {
@@ -436,8 +514,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Create a new Job for this task - allows cancellation via stopTask()
         currentTaskJob = kotlinx.coroutines.Job()
 
+        val userTimestamp = System.currentTimeMillis()
+        val pendingConversationId = _uiState.value.activeConversationId ?: -1L
+        val userMessage = UiMessage(
+            role = "user",
+            content = text,
+            formattedContent = FormattedContent.TextContent(text),
+            timestamp = userTimestamp
+        )
+        pendingMessagesByConversationId.value =
+            pendingMessagesByConversationId.value.toMutableMap().apply {
+                this[pendingConversationId] = (this[pendingConversationId].orEmpty() + userMessage)
+            }
+
         _uiState.value = _uiState.value.copy(
-            messages = _uiState.value.messages + UiMessage("user", text),
+            messages = _uiState.value.messages + userMessage,
             isLoading = true,
             isRunning = true,
             error = null
@@ -449,10 +540,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // Refresh app mapping before each request
             AppMapper.refreshLauncherApps()
 
+            val ensuredConversationId = _uiState.value.activeConversationId ?: run {
+                val createdId = conversationUseCase.createConversation()
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(activeConversationId = createdId)
+                    preferencesManager.saveCurrentConversationId(createdId)
+                }
+                createdId
+            }
+
             // Save user message to database
-            if (_uiState.value.activeConversationId != null) {
+            if (ensuredConversationId != -1L) {
                 try {
-                    repository.saveUserMessage(_uiState.value.activeConversationId!!, text)
+                    repository.saveUserMessage(ensuredConversationId, text, userTimestamp)
                 } catch (e: Exception) {
                     Log.e("ChatViewModel", "Failed to save user message", e)
                 }
@@ -469,32 +569,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var currentPrompt = text
             var step = 0
             val maxSteps = 20
-            
+
+            // Check if app is in foreground (used for both goHome and screenshot decisions)
+            val isAppInForeground = if (DEBUG_MODE) false else AppStateTracker.isAppInForeground(getApplication())
+            Log.d("AutoGLM_Trace", "App in foreground: $isAppInForeground")
+
             if (!DEBUG_MODE && service != null) {
                 // Reset floating window state for new task
                 service.resetFloatingWindowForNewTask()
 
-                // Show floating window and minimize app
                 withContext(Dispatchers.Main) {
-                    service.showFloatingWindow(
-                        onStop = { stopTask() },
-                        isRunning = true
-                    )
-
-                    // Only go home (minimize) if we are currently in the app
-                    // If we are using floating window over another app, we shouldn't go home
-                    val currentPkg = service.currentApp.value
-                    val myPkg = getApplication<Application>().packageName
-                    Log.d("AutoGLM_Trace", "goHome check: currentPkg=$currentPkg, myPkg=$myPkg")
-
-                    if (currentPkg == myPkg || currentPkg == null) {
-                        Log.d("AutoGLM_Trace", "Executing goHome()")
+                    // Only go home if this app is in the foreground
+                    if (isAppInForeground) {
+                        Log.d("AutoGLM_Trace", "App is in foreground, executing goHome()")
                         service.goHome()
                     } else {
-                        Log.d("AutoGLM_Trace", "Skipping goHome()")
+                        Log.d("AutoGLM_Trace", "App not in foreground, skipping goHome()")
                     }
                 }
-                delay(1000) // Wait for animation and window to appear
+
+                // Show floating window and wait for layout completion
+                // This is more reliable than blind delay - uses OnGlobalLayoutListener callback
+                Log.d("AutoGLM_Trace", "Showing floating window and waiting for layout")
+                service.showFloatingWindowAndWait(
+                    onStop = { stopTask() },
+                    isRunning = true
+                )
             }
 
             var isFinished = false
@@ -509,28 +609,37 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     // 1. Take Screenshot
-                    Log.d("AutoGLM_Debug", "Taking screenshot...")
-                    val screenshot = if (DEBUG_MODE) {
-                        Bitmap.createBitmap(1080, 2400, Bitmap.Config.ARGB_8888)
+                    // Skip screenshot on first step if the request was initiated from our own app
+                    val screenshot = if (step == 1 && isAppInForeground) {
+                        Log.d("AutoGLM_Debug", "Step 1: Skipping screenshot (app in foreground)")
+                        null
                     } else {
-                        service?.takeScreenshot()
+                        Log.d("AutoGLM_Debug", "Taking screenshot for step $step...")
+                        if (DEBUG_MODE) {
+                            Bitmap.createBitmap(1080, 2400, Bitmap.Config.ARGB_8888)
+                        } else {
+                            service?.takeScreenshot()
+                        }
                     }
 
-                    if (screenshot == null) {
+                    // Check screenshot failure (only if we expected to take one)
+                    if (screenshot == null && !(step == 1 && isAppInForeground)) {
                         Log.e("AutoGLM_Debug", "Screenshot failed")
                         postError(getApplication<Application>().getString(R.string.error_screenshot_failed))
                         break
                     }
-                    Log.d("AutoGLM_Debug", "Screenshot taken: ${screenshot.width}x${screenshot.height}")
 
-                    // Use service dimensions for consistency with coordinate system
-                    val screenWidth = if (DEBUG_MODE) 1080 else service?.getScreenWidth() ?: 1080
-                    val screenHeight = if (DEBUG_MODE) 2400 else service?.getScreenHeight() ?: 2400
+                    // Log screenshot success
+                    if (screenshot != null) {
+                        Log.d("ChatViewModel", "Screenshot size: ${screenshot.width}x${screenshot.height}")
+                    }
 
-                    Log.d("ChatViewModel", "Screenshot size: ${screenshot.width}x${screenshot.height}")
-                    Log.d("ChatViewModel", "Service screen size: ${screenWidth}x${screenHeight}")
+                    // 2. Get screen dimensions for ActionParser coordinate system
+                    val screenWidth = if (DEBUG_MODE) 1080 else DisplayUtils.getScreenWidth(getApplication())
+                    val screenHeight = if (DEBUG_MODE) 2400 else DisplayUtils.getScreenHeight(getApplication())
+                    Log.d("ChatViewModel", "Screen size: ${screenWidth}x${screenHeight}")
 
-                    // 2. Build User Message
+                    // 3. Build User Message
                     val currentApp = if (DEBUG_MODE) "DebugApp" else (service?.currentApp?.value ?: "Unknown")
                     val screenInfo = "{\"current_app\": \"$currentApp\"}"
 
@@ -541,8 +650,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     val userContentItems = mutableListOf<ContentItem>()
-                    // Doubao/OpenAI vision models often prefer Image first, then Text
-                    userContentItems.add(ContentItem("image_url", imageUrl = ImageUrl("data:image/png;base64,${ModelClient.bitmapToBase64(screenshot)}")))
+                    // Only add image if we have a screenshot (subsequent steps)
+                    if (screenshot != null) {
+                        // Doubao/OpenAI vision models often prefer Image first, then Text
+                        userContentItems.add(ContentItem("image_url", imageUrl = ImageUrl("data:image/jpeg;base64,${ModelClient.bitmapToBase64(screenshot)}")))
+                    }
                     userContentItems.add(ContentItem("text", text = textPrompt))
 
                     val userMessage = Message("user", userContentItems)
@@ -591,7 +703,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     _uiState.value = _uiState.value.copy(
-                        messages = _uiState.value.messages + UiMessage("assistant", unescapedResponseText)
+                        messages = _uiState.value.messages + UiMessage(
+                            role = "assistant",
+                            content = unescapedResponseText,
+                            timestamp = System.currentTimeMillis()
+                        )
                     )
 
                     // If DEBUG_MODE, stop here after one round
@@ -606,7 +722,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     
                     // Update Floating Window Status with friendly description
                     service?.updateFloatingStatus(getActionDescription(action))
-                    
+
                     // 5. Execute Action
                     val executor = actionExecutor
                     if (executor == null) {
@@ -650,7 +766,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     isLoading = false,
                     error = null  // Explicitly clear any error
                 )
-                service?.updateFloatingStatus(getApplication<Application>().getString(R.string.status_stopped))
+                // Note: Do NOT call updateFloatingStatus() here as it creates a race condition
+                // where isTaskRunning stays true while status shows "stopped", preventing
+                // the window from hiding when app resumes. The window dismissal is handled
+                // by the FloatingWindowContent.kt stop button onClick handler.
                 updateTaskState(TaskEndState.USER_STOPPED, step)
             } catch (e: Exception) {
                 e.printStackTrace()

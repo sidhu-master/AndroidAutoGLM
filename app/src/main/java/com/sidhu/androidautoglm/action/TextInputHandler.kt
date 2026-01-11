@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import com.sidhu.androidautoglm.AutoGLMService
+import com.sidhu.androidautoglm.BuildConfig
 import kotlinx.coroutines.delay
 
 /**
@@ -23,6 +24,14 @@ class TextInputHandler(private val service: AutoGLMService) {
     companion object {
         private const val TAG = "TextInputHandler"
         private const val DEFAULT_VERIFY_DELAY_MS = 150L      // Wait for text to be processed
+        private const val VISUAL_INPUT_FAILED_STATUS = "未输入正确的文本"
+    }
+
+    private val keyboardAgent by lazy { com.sidhu.autoinput.KeyboardAgent(service) }
+
+    fun setDebugListener(listener: (android.graphics.Bitmap, String) -> Unit) {
+        keyboardAgent.onDebugInfo = listener
+        com.sidhu.autoinput.KeyboardScanner.setCandidateDebugListener(listener)
     }
 
     /**
@@ -269,9 +278,11 @@ class TextInputHandler(private val service: AutoGLMService) {
     /**
      * Main entry point: inputs text with focus management, verification, and fallback.
      *
+     * @param text The text to input
      * @return true if text input was successful (full or partial)
      */
     suspend fun inputText(text: String): Boolean {
+        Log.d("VisualInputTest", ">>> Start inputText: '$text'")
         if (text.isEmpty()) {
             Log.w(TAG, "Empty text provided")
             return false
@@ -282,34 +293,94 @@ class TextInputHandler(private val service: AutoGLMService) {
         // Ensure we have a focused editable node
         val targetNode = ensureFocusedEditableNode()
         if (targetNode == null) {
-            Log.e(TAG, "No focused editable node available")
-            return false
+            Log.w(TAG, "No focused editable node available. Will attempt Visual Input.")
+            Log.d("VisualInputTest", "TargetNode is null, proceeding with Visual Input")
+        } else {
+            if (BuildConfig.AUTO_INPUT_DEV_MODE) {
+                Log.d("VisualInputTest", "TargetNode found, but dev mode forces Visual Input")
+            } else {
+                Log.d("VisualInputTest", "TargetNode found, using Accessibility text input first")
+            }
         }
 
-        // Truncate if max length is known
-        val maxLength = getMaxLength(targetNode)
-        val textToSet = if (maxLength != null && maxLength < text.length) {
-            Log.d(TAG, "Text truncated to max length $maxLength")
-            truncateToMaxLength(text, maxLength)
+        // Truncate if max length is known (only possible if node found)
+        val textToSet = if (targetNode != null) {
+            val maxLength = getMaxLength(targetNode)
+             if (maxLength != null && maxLength < text.length) {
+                Log.d(TAG, "Text truncated to max length $maxLength")
+                truncateToMaxLength(text, maxLength)
+            } else {
+                text
+            }
         } else {
             text
         }
 
-        // Step 1: Try ACTION_SET_TEXT with verification
-        if (setTextWithVerification(targetNode, textToSet)) {
-            Log.d(TAG, "Text input successful via ACTION_SET_TEXT")
+        if (!BuildConfig.AUTO_INPUT_DEV_MODE && targetNode != null) {
+            Log.d(TAG, "Attempting Accessibility input: ACTION_SET_TEXT")
+            Log.d("VisualInputTest", "Attempting Accessibility: SET_TEXT")
+            if (setTextWithVerification(targetNode, textToSet)) {
+                Log.d(TAG, "Text input successful via ACTION_SET_TEXT")
+                Log.d("VisualInputTest", "Accessibility SET_TEXT Success")
+                return true
+            }
+
+            Log.w(TAG, "ACTION_SET_TEXT failed, falling back to clipboard paste")
+            Log.d("VisualInputTest", "Attempting Accessibility: PASTE")
+            if (pasteText(targetNode, textToSet)) {
+                Log.d(TAG, "Text input successful via ACTION_PASTE fallback")
+                Log.d("VisualInputTest", "Accessibility PASTE Success")
+                return true
+            }
+
+            Log.e(TAG, "Accessibility text input failed")
+            Log.e("VisualInputTest", "Accessibility methods failed.")
+            return false
+        }
+
+        val method = if (BuildConfig.AUTO_INPUT_DEV_MODE) {
+            "Visual Keyboard Simulation (Dev Mode)"
+        } else {
+            "Visual Keyboard Simulation"
+        }
+        Log.i(TAG, "Starting Text Input. Method: $method")
+        Log.d("VisualInputTest", "Preparing for Visual Input. Moving window...")
+
+        service.floatingWindowController?.moveWindowToTop()
+        delay(300)
+
+        Log.d("VisualInputTest", "Taking screenshot for keyboard scan...")
+        val screenshot = service.takeScreenshot(timeoutMs = 2000)
+
+        if (screenshot == null) {
+            Log.e(TAG, "Screenshot failed, cannot perform Visual Input")
+            Log.e("VisualInputTest", "Screenshot was NULL.")
+            service.updateFloatingStatus(VISUAL_INPUT_FAILED_STATUS)
+            service.floatingWindowController?.setTaskRunning(false)
+            return false
+        }
+
+        Log.d("VisualInputTest", "Screenshot captured successfully (${screenshot.width}x${screenshot.height}). Calling KeyboardAgent...")
+        val ok = keyboardAgent.type(
+            textToSet,
+            screenshot,
+            screenshotProvider = {
+                Log.d("VisualInputTest", "Provider: Capturing new screenshot for candidates...")
+                Log.d(TAG, "Capturing new screenshot for candidate selection...")
+                service.takeScreenshot(timeoutMs = 2000)
+            }
+        )
+        if (ok) {
+            Log.d(TAG, "Text input successful via Keyboard Agent")
+            Log.d("VisualInputTest", "KeyboardAgent.type returned TRUE. Visual Input Success.")
+            delay(500)
             return true
         }
 
-        // Step 2: Verification failed - fall back to clipboard paste
-        Log.w(TAG, "ACTION_SET_TEXT verification failed, falling back to clipboard paste")
-
-        return pasteText(targetNode, textToSet).also { isSuccess ->
-            if (isSuccess) {
-                Log.d(TAG, "Text input successful via ACTION_PASTE fallback")
-            } else {
-                Log.e(TAG, "All text input methods failed")
-            }
-        }
+        Log.w(TAG, "Keyboard Agent failed")
+        Log.d("VisualInputTest", "KeyboardAgent.type returned FALSE. Visual Input Failed.")
+        service.updateFloatingStatus(VISUAL_INPUT_FAILED_STATUS)
+        service.floatingWindowController?.setTaskRunning(false)
+        return false
     }
 }

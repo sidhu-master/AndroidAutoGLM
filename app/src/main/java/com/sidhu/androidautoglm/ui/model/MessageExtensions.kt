@@ -23,10 +23,22 @@ import android.content.Context
 fun com.sidhu.androidautoglm.data.repository.MessageWithImage.toUiMessage(context: Context? = null): UiMessage? {
     val msg = message
     return when (msg.role) {
-        "user" -> UiMessage("user", msg.content, bitmap, FormattedContent.TextContent(msg.content))
+        "user" -> UiMessage(
+            role = "user",
+            content = msg.content,
+            image = bitmap,
+            formattedContent = FormattedContent.TextContent(msg.content),
+            timestamp = msg.timestamp
+        )
         "assistant" -> {
             val formattedContent = parseAssistantContent(msg.content, context)
-            UiMessage("assistant", msg.content, bitmap, formattedContent)
+            UiMessage(
+                role = "assistant",
+                content = msg.content,
+                image = bitmap,
+                formattedContent = formattedContent,
+                timestamp = msg.timestamp
+            )
         }
         else -> null
     }

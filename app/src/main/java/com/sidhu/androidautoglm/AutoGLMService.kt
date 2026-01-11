@@ -5,8 +5,12 @@ import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Path
+import android.graphics.Rect
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityWindowInfo
+import com.sidhu.autoinput.GestureAnimator
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withTimeout
@@ -14,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
@@ -43,6 +48,10 @@ class AutoGLMService : AccessibilityService() {
     // Coroutine scope for service operations
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    private var lastImeVisible: Boolean = false
+    private var lastImeCheckMs: Long = 0
+    private var lastMoveWindowToTopMs: Long = 0
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         _serviceInstance.value = this
@@ -62,17 +71,19 @@ class AutoGLMService : AccessibilityService() {
     }
     
     /**
-     * Shows the floating window. Creates the controller if needed.
+     * Shows the floating window and waits for layout to complete.
+     * This is more reliable than blind delay for ensuring window is ready for operations like screenshot.
+     *
      * @param onStop Optional callback when stop button is clicked
      * @param isRunning Whether the task is currently running (affects UI display)
      */
-    fun showFloatingWindow(onStop: () -> Unit, isRunning: Boolean = true) {
-        serviceScope.launch {
+    suspend fun showFloatingWindowAndWait(onStop: () -> Unit, isRunning: Boolean = true) {
+        withContext(Dispatchers.Main) {
             if (_floatingWindowController == null) {
                 _floatingWindowController = FloatingWindowController(this@AutoGLMService)
             }
-            Log.d("AutoGLMService", "showFloatingWindow called with isRunning=$isRunning")
-            _floatingWindowController?.show(onStop, isRunning)
+            Log.d("AutoGLMService", "showFloatingWindowAndWait called with isRunning=$isRunning")
+            _floatingWindowController?.showAndWaitForLayout(onStop, isRunning)
         }
     }
 
@@ -120,7 +131,43 @@ class AutoGLMService : AccessibilityService() {
         performGlobalAction(GLOBAL_ACTION_HOME)
     }
 
+    private fun isImeVisible(): Boolean {
+        return try {
+            val currentWindows = windows
+            for (window in currentWindows) {
+                if (window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                    val bounds = Rect()
+                    window.getBoundsInScreen(bounds)
+                    if (bounds.width() > 0 && bounds.height() > 0) return true
+                }
+            }
+            false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun handleImeVisibility() {
+        val now = System.currentTimeMillis()
+        val throttleMs = 250L
+        if (now - lastImeCheckMs < throttleMs) return
+        lastImeCheckMs = now
+
+        val visible = isImeVisible()
+        if (visible) {
+            val debounceMs = 800L
+            val isRisingEdge = !lastImeVisible
+            val canRepeat = now - lastMoveWindowToTopMs >= debounceMs
+            if (isRisingEdge || canRepeat) {
+                lastMoveWindowToTopMs = now
+                _floatingWindowController?.moveWindowToTop()
+            }
+        }
+        lastImeVisible = visible
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        handleImeVisibility()
         event?.packageName?.let {
             val pkg = it.toString()
             if (_currentApp.value != pkg) {
@@ -147,47 +194,53 @@ class AutoGLMService : AccessibilityService() {
      */
     suspend fun takeScreenshot(timeoutMs: Long = 5000): Bitmap? {
         return _floatingWindowController?.useWindowSuspension {
-            // Use withTimeout to handle screenshot operation timeout
-            withTimeout(timeoutMs) {
-                // Take Screenshot with callback
-                suspendCoroutine<Bitmap?> { continuation ->
-                    val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-                    val displayId = windowManager.defaultDisplay.displayId
+            GestureAnimator.hideAllOverlays()
+            delay(60)
+            try {
+                // Use withTimeout to handle screenshot operation timeout
+                withTimeout(timeoutMs) {
+                    // Take Screenshot with callback
+                    suspendCoroutine<Bitmap?> { continuation ->
+                        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+                        val displayId = windowManager.defaultDisplay.displayId
 
-                    takeScreenshot(
-                        displayId,
-                        mainExecutor,
-                        object : TakeScreenshotCallback {
-                            override fun onSuccess(screenshot: ScreenshotResult) {
-                                try {
-                                    val bitmap = Bitmap.wrapHardwareBuffer(
-                                        screenshot.hardwareBuffer,
-                                        screenshot.colorSpace
-                                    )
-                                    // Copy to software bitmap for processing
-                                    val softwareBitmap = bitmap?.copy(Bitmap.Config.ARGB_8888, false)
-                                    screenshot.hardwareBuffer.close()
-                                    continuation.resume(softwareBitmap)
-                                } catch (e: Exception) {
-                                    Log.e("AutoGLMService", "Error processing screenshot", e)
+                        takeScreenshot(
+                            displayId,
+                            mainExecutor,
+                            object : TakeScreenshotCallback {
+                                override fun onSuccess(screenshot: ScreenshotResult) {
+                                    try {
+                                        val bitmap = Bitmap.wrapHardwareBuffer(
+                                            screenshot.hardwareBuffer,
+                                            screenshot.colorSpace
+                                        )
+                                        // Copy to software bitmap for processing
+                                        val softwareBitmap = bitmap?.copy(Bitmap.Config.ARGB_8888, false)
+                                        screenshot.hardwareBuffer.close()
+                                        continuation.resume(softwareBitmap)
+                                    } catch (e: Exception) {
+                                        Log.e("AutoGLMService", "Error processing screenshot", e)
+                                        continuation.resume(null)
+                                    }
+                                }
+
+                                override fun onFailure(errorCode: Int) {
+                                    val errorMsg = when(errorCode) {
+                                        ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR -> "INTERNAL_ERROR"
+                                        ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS -> "NO_ACCESSIBILITY_ACCESS"
+                                        ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT -> "INTERVAL_TIME_SHORT"
+                                        ERROR_TAKE_SCREENSHOT_INVALID_DISPLAY -> "INVALID_DISPLAY"
+                                        else -> "UNKNOWN($errorCode)"
+                                    }
+                                    Log.e("AutoGLMService", "Screenshot failed: $errorMsg")
                                     continuation.resume(null)
                                 }
                             }
-
-                            override fun onFailure(errorCode: Int) {
-                                val errorMsg = when(errorCode) {
-                                    ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR -> "INTERNAL_ERROR"
-                                    ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS -> "NO_ACCESSIBILITY_ACCESS"
-                                    ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT -> "INTERVAL_TIME_SHORT"
-                                    ERROR_TAKE_SCREENSHOT_INVALID_DISPLAY -> "INVALID_DISPLAY"
-                                    else -> "UNKNOWN($errorCode)"
-                                }
-                                Log.e("AutoGLMService", "Screenshot failed: $errorMsg")
-                                continuation.resume(null)
-                            }
-                        }
-                    )
+                        )
+                    }
                 }
+            } finally {
+                GestureAnimator.restoreAllOverlays()
             }
         } ?: run {
             Log.e("AutoGLMService", "FloatingWindowController not available for screenshot")
