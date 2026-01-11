@@ -156,6 +156,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
-    implementation("com.sidhu:autoinput")
+    // implementation("com.sidhu:autoinput")
+    implementation("com.sidhu.autoinput:library:1.1.1")
     implementation(files("libs/sherpa-onnx-1.12.20.aar"))
 }
