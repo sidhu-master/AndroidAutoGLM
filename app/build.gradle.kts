@@ -15,6 +15,7 @@ if (localPropertiesFile.exists()) {
     localProperties.load(localPropertiesFile.inputStream())
 }
 val defaultApiKey = localProperties.getProperty("ZHIPU_API_KEY") ?: ""
+val minimaxApiKey = localProperties.getProperty("MINIMAX_API_KEY") ?: ""
 
 // Tasks
 tasks.register("downloadModel") {
@@ -60,7 +61,7 @@ android {
 
     defaultConfig {
         applicationId = "com.sidhu.androidautoglm"
-        minSdk = 30
+        minSdk = 24
         targetSdk = 34
         versionCode = 7
         versionName = "1.1.0"
@@ -71,6 +72,7 @@ android {
         }
         
         buildConfigField("String", "DEFAULT_API_KEY", "\"$defaultApiKey\"")
+        buildConfigField("String", "MINIMAX_API_KEY", "\"$minimaxApiKey\"")
     }
 
     buildTypes {
@@ -148,6 +150,10 @@ dependencies {
     // Markdown
     implementation("com.github.jeziellago:compose-markdown:0.3.7")
 
+    // Shizuku API (系统级控制：WiFi/蓝牙/音量等)
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
+
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
@@ -156,7 +162,5 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
-    // implementation("com.sidhu:autoinput")
-    implementation("com.sidhu.autoinput:library:1.1.1")
     implementation(files("libs/sherpa-onnx-1.12.20.aar"))
 }

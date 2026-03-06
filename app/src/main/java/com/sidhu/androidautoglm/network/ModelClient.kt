@@ -32,25 +32,19 @@ class ModelClient(
     private val geminiApi: GeminiApi?
     private val doubaoApi: DoubaoApi?
 
-    init {
-        // val logging = HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.NONE }
-        val client = OkHttpClient.Builder()
-            // .addInterceptor(logging)
-            .connectTimeout(60, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(60, TimeUnit.SECONDS)
-            .build()
+    // 缓存 isDoubao 判断，避免 sendRequest 每次重复计算
+    private val isDoubao = modelName.contains("doubao", ignoreCase = true) ||
+            baseUrl.contains("volces.com", ignoreCase = true)
 
+    init {
         val finalBaseUrl = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
         Log.d("AutoGLM_Debug", "ModelClient initialized with Base URL: $finalBaseUrl")
         
         val retrofit = Retrofit.Builder()
             .baseUrl(finalBaseUrl)
-            .client(client)
+            .client(sharedHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-
-        val isDoubao = modelName.contains("doubao", ignoreCase = true) || baseUrl.contains("volces.com", ignoreCase = true)
 
         if (isGemini) {
             openAiApi = null
@@ -69,7 +63,6 @@ class ModelClient(
 
     suspend fun sendRequest(history: List<Message>, screenshot: Bitmap?): String {
         Log.d("AutoGLM_Debug", "ModelClient.sendRequest called. isGemini: $isGemini")
-        val isDoubao = modelName.contains("doubao", ignoreCase = true) || baseUrl.contains("volces.com", ignoreCase = true)
         return if (isGemini) {
             sendGeminiRequest(history)
         } else if (isDoubao) {
@@ -224,6 +217,8 @@ class ModelClient(
                 }
                 return "Error: ${response.code()} $errorMessage"
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e("AutoGLM_Debug", "Doubao API Exception", e)
             return "Error: ${e.message}"
@@ -293,6 +288,27 @@ class ModelClient(
     }
     
     companion object {
+        // 任务计划指令：告诉 AI 在接到新任务时输出任务计划
+        const val TASK_PLAN_INSTRUCTION = """
+当你接收到一个新任务时，请在回复的 <think> 标签中包含一个任务计划，格式如下：
+<task_plan>
+# 任务：[任务简述]
+- [ ] 步骤1：完整描述（见下方说明）
+- [ ] 步骤2：完整描述
+...
+</task_plan>
+
+**重要：每个任务步骤必须独立且自包含**
+- 每个步骤会被派发给执行代理，执行代理看不到其他步骤的上下文
+- 步骤描述要足够详细，包含执行该步骤所需的全部信息
+- 涉及总结、查看屏幕内容时，必须用「当前」：如「总结当前视频的内容」，不要写「总结第三条视频」——执行代理只能看到当前屏幕
+- 正确示例：用户说「开抖音看第三条是什么内容」→ 步骤1「启动抖音，滑动到第三条视频」、步骤2「总结当前视频的内容」
+
+你是唯一负责更新任务计划状态的角色。每次你被调用时（包括进度检查），请在 <think> 中输出最新的 <task_plan>，根据对话历史准确标记每个步骤的状态。
+
+状态标记：[ ] 待完成 | [x] 已完成 | [/] 进行中
+"""
+
         const val SYSTEM_PROMPT = """
 你是一个智能体分析专家，可以根据操作历史和当前状态图执行一系列操作来完成任务。
 你必须严格按照要求输出以下格式：
@@ -358,17 +374,26 @@ class ModelClient(
 18. 在结束任务前请一定要仔细检查任务是否完整准确的完成，如果出现错选、漏选、多选的情况，请返回之前的步骤进行纠正。
 """
 
+        // 全局共享的 OkHttpClient，复用连接池和线程池，避免每次实例化重建
+        val sharedHttpClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(60, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(60, TimeUnit.SECONDS)
+                .build()
+        }
+
         fun bitmapToBase64(bitmap: Bitmap): String {
             // 1. Resize if too large (max dimension 1024) to avoid server 500 errors
             val maxDimension = 1024
             val scale = if (bitmap.width > maxDimension || bitmap.height > maxDimension) {
-                val ratio = maxDimension.toFloat() / maxOf(bitmap.width, bitmap.height)
-                ratio
+                maxDimension.toFloat() / maxOf(bitmap.width, bitmap.height)
             } else {
                 1.0f
             }
             
-            val finalBitmap = if (scale < 1.0f) {
+            val isScaled = scale < 1.0f
+            val finalBitmap = if (isScaled) {
                 val newWidth = (bitmap.width * scale).toInt()
                 val newHeight = (bitmap.height * scale).toInt()
                 Log.d("AutoGLM_Debug", "Resizing image from ${bitmap.width}x${bitmap.height} to ${newWidth}x${newHeight}")
@@ -377,11 +402,17 @@ class ModelClient(
                 bitmap
             }
 
-            val outputStream = ByteArrayOutputStream()
-            finalBitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
-            val bytes = outputStream.toByteArray()
-            Log.d("AutoGLM_Debug", "Image Base64 size: ${bytes.size / 1024} KB")
-            return Base64.encodeToString(bytes, Base64.NO_WRAP)
+            return try {
+                val outputStream = ByteArrayOutputStream()
+                // quality=80 在 AI 视觉识别质量不变的前提下，体积比 100 缩小约 5 倍
+                finalBitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
+                val bytes = outputStream.toByteArray()
+                Log.d("AutoGLM_Debug", "Image Base64 size: ${bytes.size / 1024} KB")
+                Base64.encodeToString(bytes, Base64.NO_WRAP)
+            } finally {
+                // 仅回收缩放后的新 Bitmap，不回收调用方传入的原图
+                if (isScaled) finalBitmap.recycle()
+            }
         }
     }
 }

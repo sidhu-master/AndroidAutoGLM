@@ -6,9 +6,12 @@ import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -69,11 +72,12 @@ object SherpaModelManager {
                     modelConfig = OfflineModelConfig(
                         senseVoice = OfflineSenseVoiceModelConfig(
                             model = modelFile.absolutePath,
-                            language = "" // Auto detect
+                            language = "zh", // 强制中文，提升识别准确率
+                            useInverseTextNormalization = true // 开启逆文本规范化（数字/标点更自然）
                         ),
                         tokens = tokensFile.absolutePath,
-                        debug = true,
-                        numThreads = 1,
+                        debug = false,
+                        numThreads = 2,
                         modelType = "sense_voice"
                     )
                 )
@@ -122,5 +126,18 @@ object SherpaModelManager {
         recognizer?.release()
         recognizer = null
         _modelState.value = ModelState.NotInitialized
+    }
+
+    /** 模型就绪时执行回调；若已就绪则立即执行，否则等待 Ready 后执行 */
+    fun runWhenReady(scope: CoroutineScope, context: Context, block: () -> Unit) {
+        when (val state = _modelState.value) {
+            is ModelState.Ready -> block()
+            is ModelState.Error -> { /* 不执行 */ }
+            else -> scope.launch(Dispatchers.Main) {
+                if (state is ModelState.NotInitialized) initModel(context)
+                val final = _modelState.first { it is ModelState.Ready || it is ModelState.Error }
+                if (final is ModelState.Ready) block()
+            }
+        }
     }
 }

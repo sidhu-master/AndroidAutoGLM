@@ -1,20 +1,14 @@
 package com.sidhu.androidautoglm.action
 
-import android.content.Intent
+import android.os.Build
+import androidx.annotation.RequiresApi
 import android.util.Log
-import com.sidhu.androidautoglm.AutoGLMService
+import com.sidhu.androidautoglm.IGLMService
 import kotlinx.coroutines.delay
 
-class ActionExecutor(private val service: AutoGLMService) {
+class ActionExecutor(private val service: IGLMService) {
 
-    private val textInputHandler = TextInputHandler(service)
-
-    fun setDebugListener(listener: ((android.graphics.Bitmap, String) -> Unit)?) {
-        if (listener != null) {
-            textInputHandler.setDebugListener(listener)
-        }
-    }
-
+    @RequiresApi(Build.VERSION_CODES.N)
     suspend fun execute(action: Action): Boolean {
         return when (action) {
             is Action.Tap -> {
@@ -49,34 +43,18 @@ class ActionExecutor(private val service: AutoGLMService) {
             }
             is Action.Type -> {
                 Log.d("ActionExecutor", "Typing ${action.text}")
-                textInputHandler.inputText(action.text)
+                service.performDirectTextInput(action.text)
             }
             is Action.Launch -> {
                 Log.d("ActionExecutor", "Launching ${action.appName}")
-                // Need a map of App Name -> Package Name. For now, just try generic intent or implement a mapper.
-                // Simplified: Assume appName IS packageName for this MVP or implement a small mapper
-                // A real implementation needs the package mapper from the original project
                 val packageName = AppMatcher.getPackageName(action.appName)
                 if (packageName != null) {
-                    val intent = service.packageManager.getLaunchIntentForPackage(packageName)
-                    if (intent != null) {
-                        Log.d("ActionExecutor", "Found intent for $packageName, starting activity...")
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        try {
-                            service.startActivity(intent)
-                            Log.d("ActionExecutor", "Activity started successfully")
-                            delay(2000)
-                            true
-                        } catch (e: Exception) {
-                            Log.e("ActionExecutor", "Failed to start activity: ${e.message}")
-                            false
-                        }
-                    } else {
-                        Log.e("ActionExecutor", "Launch intent is null for $packageName")
-                        false
-                    }
+                    val success = service.launchApp(packageName)
+                    if (success) delay(2000)
+                    else Log.e("ActionExecutor", "Failed to launch $packageName")
+                    success
                 } else {
-                    Log.e("ActionExecutor", "Unknown app: ${action.appName} (mapped to null)")
+                    Log.e("ActionExecutor", "Unknown app: ${action.appName}")
                     false
                 }
             }

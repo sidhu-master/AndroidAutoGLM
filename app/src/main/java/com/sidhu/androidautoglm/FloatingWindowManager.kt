@@ -14,6 +14,7 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.sidhu.androidautoglm.utils.DisplayUtils
 import com.sidhu.androidautoglm.utils.WindowUtils
 
 /**
@@ -68,8 +69,10 @@ class FloatingWindowManager(private val context: Context) {
      * @return configured LayoutParams
      */
     fun createWindowParams(): WindowManager.LayoutParams {
+        val screenWidthPx = DisplayUtils.getScreenWidth(context)
+        Log.d(TAG, "createWindowParams: width=$screenWidthPx px (full screen)")
         return WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            screenWidthPx,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -164,13 +167,14 @@ class FloatingWindowManager(private val context: Context) {
      */
     fun suspendWindow(view: View?, params: WindowManager.LayoutParams): Boolean {
         if (view == null) return false
+        val t0 = System.currentTimeMillis()
         return try {
             view.visibility = View.GONE
             params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
             params.width = 0
             params.height = 0
             windowManager.updateViewLayout(view, params)
-            Log.d(TAG, "Window suspended successfully")
+            Log.d(TAG, "Window suspended (visibility=GONE, 0x0) at t=$t0, updateLayout took ${System.currentTimeMillis() - t0}ms")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Error suspending window", e)
@@ -181,8 +185,8 @@ class FloatingWindowManager(private val context: Context) {
     /**
      * Restores a suspended window to its normal visible state.
      *
-     * Counterpart to suspendWindow(). Restores the window to WRAP_CONTENT size
-     * and makes it interactive again.
+     * Counterpart to suspendWindow(). Restores the window to MATCH_PARENT x WRAP_CONTENT
+     * (与 createWindowParams 一致) and makes it interactive again.
      *
      * @param view The view to restore
      * @param params The layout parameters to modify
@@ -190,13 +194,14 @@ class FloatingWindowManager(private val context: Context) {
      */
     fun restoreWindow(view: View?, params: WindowManager.LayoutParams): Boolean {
         if (view == null) return false
+        val t0 = System.currentTimeMillis()
         return try {
             view.visibility = View.VISIBLE
             params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-            params.width = WindowManager.LayoutParams.WRAP_CONTENT
+            params.width = DisplayUtils.getScreenWidth(context)
             params.height = WindowManager.LayoutParams.WRAP_CONTENT
             windowManager.updateViewLayout(view, params)
-            Log.d(TAG, "Window restored successfully")
+            Log.d(TAG, "Window restored at t=$t0, updateLayout took ${System.currentTimeMillis() - t0}ms")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Error restoring window", e)

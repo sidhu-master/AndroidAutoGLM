@@ -10,8 +10,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.sidhu.androidautoglm.data.TaskEndState
-import com.sidhu.androidautoglm.ui.util.displayText
-import com.sidhu.androidautoglm.ui.util.displayColor
+import com.sidhu.androidautoglm.utils.displayText
+import com.sidhu.androidautoglm.utils.displayColor
 
 /**
  * A reusable badge component for displaying task state.

@@ -26,6 +26,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CompletableDeferred
@@ -66,12 +67,18 @@ sealed class FloatingWindowState {
     data class Visible(
         val statusText: String,
         val isTaskRunning: Boolean = true,
-        val onStopCallback: (() -> Unit)? = null
+        val onStopCallback: (() -> Unit)? = null,
+        val taskList: List<String> = emptyList(),
+        val thinkingLines: List<String> = emptyList(),
+        val actionContent: com.sidhu.androidautoglm.ui.model.FormattedContent.ActionContent? = null
     ) : FloatingWindowState()
 
-    /** Task has completed naturally (not user cancelled) */
+    /** Task has completed naturally (not user cancelled). Preserves task list and thinking for display. */
     data class TaskCompleted(
-        val statusText: String
+        val statusText: String,
+        val taskList: List<String> = emptyList(),
+        val thinkingLines: List<String> = emptyList(),
+        val actionContent: com.sidhu.androidautoglm.ui.model.FormattedContent.ActionContent? = null
     ) : FloatingWindowState()
 
     /**
@@ -81,7 +88,10 @@ sealed class FloatingWindowState {
     data class TemporarilyHidden(
         val cachedStatusText: String,
         val cachedIsTaskRunning: Boolean,
-        val cachedOnStopCallback: (() -> Unit)?
+        val cachedOnStopCallback: (() -> Unit)?,
+        val cachedTaskList: List<String> = emptyList(),
+        val cachedThinkingLines: List<String> = emptyList(),
+        val cachedActionContent: com.sidhu.androidautoglm.ui.model.FormattedContent.ActionContent? = null
     ) : FloatingWindowState()
 
     /**
@@ -117,6 +127,11 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
      * This prevents race conditions during concurrent state changes.
      */
     private val stateMutex = Mutex()
+
+    /** 记录 suspendWindow 调用时刻，用于统计用户体感的隐藏时长 */
+    private var lastSuspendTimeMs: Long = 0
+    /** 记录 operation 开始时刻（delay(80) 之后），用于拆分日志 */
+    private var operationStartTimeMs: Long = 0
 
     /**
      * Whether the floating window is currently attached to WindowManager.
@@ -277,12 +292,16 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
         controllerScope.launch {
             Log.d("FloatingWindow", "markTaskCompleted() called")
             val currentState = _stateFlow.value
-            val currentStatus = if (currentState is FloatingWindowState.Visible) {
-                currentState.statusText
-            } else {
-                context.getString(R.string.fw_ready)
+            val (currentStatus, taskList, thinkingLines) = when (currentState) {
+                is FloatingWindowState.Visible -> Triple(
+                    currentState.statusText,
+                    currentState.taskList,
+                    currentState.thinkingLines
+                )
+                else -> Triple(context.getString(R.string.fw_ready), emptyList(), emptyList())
             }
-            setState(FloatingWindowState.TaskCompleted(currentStatus))
+            val actionContent = (currentState as? FloatingWindowState.Visible)?.actionContent
+            setState(FloatingWindowState.TaskCompleted(currentStatus, taskList, thinkingLines, actionContent))
         }
     }
 
@@ -494,7 +513,10 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                         }
                     }
                 } else if (oldState is FloatingWindowState.TemporarilyHidden) {
-                    // Restoring from TemporarilyHidden - make visible again
+                    val tRestore = System.currentTimeMillis()
+                    val hiddenDurationMs = if (lastSuspendTimeMs > 0) tRestore - lastSuspendTimeMs else -1
+                    val opDurationMs = if (operationStartTimeMs > 0) tRestore - operationStartTimeMs else -1
+                    Log.i("FloatingWindow", "Window restored: 体感隐藏=${hiddenDurationMs}ms | operation耗时≈${opDurationMs}ms | suspend=$lastSuspendTimeMs restore=$tRestore")
                     floatingWindowManager.restoreWindow(floatView, windowParams)
                     _stateFlow.value = newState
                     onComplete?.invoke()
@@ -507,23 +529,18 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
 
             is FloatingWindowState.TemporarilyHidden -> {
                 // Hide window for screenshots/gestures (size 0x0, not touchable)
+                lastSuspendTimeMs = System.currentTimeMillis()
                 if (isShowing && floatView != null) {
                     floatingWindowManager.suspendWindow(floatView, windowParams)
                 }
+                Log.d("FloatingWindow", "setState TemporarilyHidden: suspendWindow done, window now GONE (t0=$lastSuspendTimeMs)")
                 _stateFlow.value = newState
 
-                // Wait for 2 frames + 16ms delay to ensure window is fully removed from screen
-                // This prevents the floating window from being captured in screenshots
-                // Reference: https://github.com/sidhu-master/AndroidAutoGLM/pull/15
+                // 1 frame 即可（与无障碍模式一致，快速恢复）
                 val choreographer = Choreographer.getInstance()
-                choreographer.postFrameCallback { _ ->
-                    // First frame rendered
-                    choreographer.postFrameCallback {
-                        // Second frame rendered - add 16ms safety margin
-                        Handler(Looper.getMainLooper()).postDelayed({
-                            onComplete?.invoke()
-                        }, 16)
-                    }
+                choreographer.postFrameCallback {
+                    Log.d("FloatingWindow", "setState TemporarilyHidden: postFrameCallback fired, onComplete invoked")
+                    onComplete?.invoke()
                 }
             }
 
@@ -603,29 +620,35 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
         statusText: String? = null,
         isTaskRunning: Boolean? = null,
         onStopCallback: (() -> Unit)? = null,
+        taskList: List<String>? = null,
+        thinkingLines: List<String>? = null,
+        actionContent: com.sidhu.androidautoglm.ui.model.FormattedContent.ActionContent? = null,
         reason: String
     ) {
         val currentState = _stateFlow.value
 
         // Build new state with updated values
-        val oldStatusText = (currentState as? FloatingWindowState.Visible)?.statusText ?: ""
-        val oldIsTaskRunning = (currentState as? FloatingWindowState.Visible)?.isTaskRunning ?: true
-        val oldCallback = (currentState as? FloatingWindowState.Visible)?.onStopCallback
+        val oldVisible = currentState as? FloatingWindowState.Visible
+        val newStatusText = statusText ?: (oldVisible?.statusText ?: "")
+        val newIsTaskRunning = isTaskRunning ?: (oldVisible?.isTaskRunning ?: true)
+        val newCallback = onStopCallback ?: oldVisible?.onStopCallback
+        val newTaskList = taskList ?: (oldVisible?.taskList ?: emptyList())
+        val newThinkingLines = thinkingLines ?: (oldVisible?.thinkingLines ?: emptyList())
+        val newActionContent = when {
+            actionContent != null -> actionContent
+            thinkingLines != null -> null  // updateThinking 时清空 actionContent，以显示 thinking
+            else -> oldVisible?.actionContent
+        }
 
-        val newStatusText = statusText ?: oldStatusText
-        val newIsTaskRunning = isTaskRunning ?: oldIsTaskRunning
-        val newCallback = onStopCallback ?: oldCallback
+        Log.d("FloatingWindow", "updateVisibleState [$reason]: status=\"$newStatusText\", taskList=${newTaskList.size}, actionContent=${newActionContent != null}")
 
-        // Log the state transition
-        Log.d("FloatingWindow", "updateVisibleState [$reason]: " +
-            "status=\"$oldStatusText\"->\"$newStatusText\"${if (statusText != null) "" else " (unchanged)"}, " +
-            "isTaskRunning=$oldIsTaskRunning->$newIsTaskRunning${if (isTaskRunning != null) "" else " (unchanged)"}")
-
-        // Go through setState for validation (single point of synchronization)
         val newState = FloatingWindowState.Visible(
             statusText = newStatusText,
             isTaskRunning = newIsTaskRunning,
-            onStopCallback = newCallback
+            onStopCallback = newCallback,
+            taskList = newTaskList,
+            thinkingLines = newThinkingLines,
+            actionContent = newActionContent
         )
         setState(newState)
     }
@@ -633,6 +656,32 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
     fun updateStatus(status: String) {
         controllerScope.launch {
             updateVisibleState(statusText = status, reason = "updateStatus")
+        }
+    }
+
+    /** 更新任务清单（步骤列表） */
+    fun updateTaskList(list: List<String>) {
+        controllerScope.launch {
+            updateVisibleState(taskList = list, reason = "updateTaskList")
+        }
+    }
+
+    /** 更新思考过程，清理标签后保留所有行用于上下滚动 */
+    fun updateThinking(text: String) {
+        controllerScope.launch {
+            val cleaned = text
+                .replace(Regex("</?think>", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("<task_plan>[\\s\\S]*?</task_plan>", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("</?task_plan>", RegexOption.IGNORE_CASE), "")
+            val lines = cleaned.lines().map { it.trim() }.filter { it.isNotEmpty() }
+            updateVisibleState(thinkingLines = lines, actionContent = null, reason = "updateThinking")
+        }
+    }
+
+    /** 更新思考区域为 DisplayActionCard 内容（优先于 thinkingLines） */
+    fun updateActionContent(actionContent: com.sidhu.androidautoglm.ui.model.FormattedContent.ActionContent?) {
+        controllerScope.launch {
+            updateVisibleState(actionContent = actionContent, reason = "updateActionContent")
         }
     }
 
@@ -649,11 +698,11 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
      * @param isHidden True to hide window, false to show
      * @param onComplete Optional callback invoked when layout is complete (if provided, waits for layout)
      */
-    fun setTemporarilyHidden(isHidden: Boolean, onComplete: (() -> Unit)? = null) {
-        // Launch in controllerScope since setState is a suspend function
+    /** @param onComplete 回调，参数 didActuallySuspend：本次是否真正执行了 suspend（嵌套调用时已 hidden 则为 false） */
+    fun setTemporarilyHidden(isHidden: Boolean, onComplete: ((didActuallySuspend: Boolean) -> Unit)? = null) {
         controllerScope.launch {
             if (!isShowing || floatView == null) {
-                onComplete?.invoke()
+                onComplete?.invoke(false)
                 return@launch
             }
 
@@ -666,23 +715,27 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                     FloatingWindowState.TemporarilyHidden(
                         cachedStatusText = currentState.statusText,
                         cachedIsTaskRunning = currentState.isTaskRunning,
-                        cachedOnStopCallback = currentState.onStopCallback
-                    ),
-                    onComplete
-                )
+                        cachedOnStopCallback = currentState.onStopCallback,
+                        cachedTaskList = currentState.taskList,
+                        cachedThinkingLines = currentState.thinkingLines,
+                        cachedActionContent = currentState.actionContent
+                    )
+                ) { onComplete?.invoke(true) }
             } else if (!isHidden && currentState is FloatingWindowState.TemporarilyHidden) {
-                // Restore to Visible state using cached values
                 Log.d("FloatingWindow", "setTemporarilyHidden: Restoring from TemporarilyHidden to Visible")
                 setState(
                     FloatingWindowState.Visible(
                         statusText = currentState.cachedStatusText,
                         isTaskRunning = currentState.cachedIsTaskRunning,
-                        onStopCallback = currentState.cachedOnStopCallback
-                    ),
-                    onComplete
-                )
+                        onStopCallback = currentState.cachedOnStopCallback,
+                        taskList = currentState.cachedTaskList,
+                        thinkingLines = currentState.cachedThinkingLines,
+                        actionContent = currentState.cachedActionContent
+                    )
+                ) { onComplete?.invoke(true) }
             } else {
-                onComplete?.invoke()
+                Log.d("FloatingWindow", "setTemporarilyHidden: already hidden (nested), skip delay")
+                onComplete?.invoke(false)
             }
         }
     }
@@ -695,22 +748,31 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
      * @param operation The suspend operation to perform while window is hidden
      * @return The result of the operation
      */
+    /**
+     * 在后台执行 operation，避免 Shizuku executeShellCommand 等阻塞调用导致主线程 ANR。
+     * setTemporarilyHidden 的 UI 更新仍在 Main，仅 operation 在 Default 上执行。
+     */
     suspend fun <T> useWindowSuspension(operation: suspend () -> T): T {
         val result = CompletableDeferred<T>()
-        setTemporarilyHidden(true) {
-            // Window is now hidden, proceed with operation
+        val tRequest = System.currentTimeMillis()
+        Log.d("FloatingWindow", "useWindowSuspension: requesting hide (tRequest=$tRequest)...")
+        setTemporarilyHidden(true) { didActuallySuspend ->
+            val tAfterSuspend = System.currentTimeMillis()
+            Log.d("FloatingWindow", "useWindowSuspension: window hidden, didActuallySuspend=$didActuallySuspend, 请求耗时=${tAfterSuspend - tRequest}ms")
             controllerScope.launch {
                 try {
-                    val opResult = operation()
-                    // Restore window after operation completes
-                    setTemporarilyHidden(false) {
-                        result.complete(opResult)
+                    // 仅首次 suspend 时等待触摸目标更新；嵌套调用（已 hidden）则跳过
+                    if (didActuallySuspend) {
+                        delay(80)
+                        Log.d("FloatingWindow", "useWindowSuspension: delay(80) done")
                     }
+                    operationStartTimeMs = System.currentTimeMillis()
+                    val opResult = withContext(Dispatchers.Default) { operation() }
+                    Log.d("FloatingWindow", "useWindowSuspension: operation done, restoring")
+                    // Restore window after operation completes (on Main)
+                    setTemporarilyHidden(false) { _ -> result.complete(opResult) }
                 } catch (e: Throwable) {
-                    // Restore window even on error
-                    setTemporarilyHidden(false) {
-                        result.completeExceptionally(e)
-                    }
+                    setTemporarilyHidden(false) { _ -> result.completeExceptionally(e) }
                 }
             }
         }
@@ -732,48 +794,15 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
         return x >= viewX && x <= (viewX + width) && y >= viewY && y <= (viewY + height)
     }
 
+    /** 暂不移动悬浮窗位置，保持初始位置 */
+    @Suppress("UNUSED_PARAMETER")
     fun avoidArea(targetX: Float, targetY: Float) {
-        // Only avoid area if window is in Visible state
-        if (_stateFlow.value !is FloatingWindowState.Visible) return
-        if (!isOccupyingSpace(targetX, targetY)) return
-
-        val screenHeight = DisplayUtils.getScreenHeight(context)
-
-        // If target is in bottom half, move window to top. Else move to bottom.
-        val targetInBottomHalf = targetY > screenHeight / 2
-
-        val newY = if (targetInBottomHalf) {
-            screenHeight - 300 // Top (distance from bottom)
-        } else {
-            20 // Bottom (distance from bottom)
-        }
-
-        // Only update if significantly different
-        if (kotlin.math.abs(windowParams.y - newY) > 200) {
-            windowParams.y = newY
-            floatingWindowManager.updateWindowLayout(floatView, windowParams)
-        }
+        // No-op: 不改变位置
     }
 
-    /**
-     * Force moves the window to the top of the screen.
-     * Useful when we know the bottom area needs to be clear (e.g., for keyboard).
-     */
+    /** 暂不移动悬浮窗位置 */
     fun moveWindowToTop() {
-        // Launch in controllerScope to ensure UI updates happen on Main thread
-        controllerScope.launch {
-            // Only move if window is in Visible state
-            if (_stateFlow.value !is FloatingWindowState.Visible) return@launch
-            
-            val screenHeight = DisplayUtils.getScreenHeight(context)
-            val newY = screenHeight - 400 // Move well away from bottom area
-            
-            // Only update if not already near top
-            if (windowParams.y < newY - 100) { // If current Y is significantly less than target (i.e., lower on screen)
-                 windowParams.y = newY
-                 floatingWindowManager.updateWindowLayout(floatView, windowParams)
-            }
-        }
+        // No-op: 不改变位置
     }
     
 

@@ -7,8 +7,6 @@ import androidx.lifecycle.viewModelScope
 import com.sidhu.androidautoglm.R
 import com.sidhu.androidautoglm.data.AppDatabase
 import com.sidhu.androidautoglm.data.ImageStorage
-import com.sidhu.androidautoglm.data.TaskEndState
-import com.sidhu.androidautoglm.data.entity.Conversation
 import com.sidhu.androidautoglm.data.repository.ConversationRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,8 +17,6 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import com.sidhu.androidautoglm.ui.util.displayTextOrNull
-import com.sidhu.androidautoglm.ui.util.displayColorOrNull
 
 /**
  * ViewModel for the conversation list screen.

@@ -19,6 +19,32 @@ sealed class Action {
 
 object ActionParser {
 
+    // 正则编译开销较大，提升为常量，整个生命周期只编译一次
+    private val FINISH_REGEX = Regex(
+        """finish\s*\(\s*message\s*=\s*["']([\s\S]*?)["']\s*\)""",
+        RegexOption.IGNORE_CASE
+    )
+    private val DO_REGEX = Regex(
+        """do\s*\((.*)\)""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+
+    /**
+     * 找到文本中最后一个 do(...) 或 finish(...) 的起始位置。
+     * 取最后一个是因为模型在上一步失败后会重新输出 fallback 动作。
+     * @return 起始索引，未找到返回 -1
+     */
+    private fun findActionStart(text: String): Int {
+        val lastDo = text.lastIndexOf("do(")
+        val lastFinish = text.lastIndexOf("finish(")
+        return when {
+            lastDo > lastFinish -> lastDo
+            lastFinish >= 0 -> lastFinish
+            lastDo >= 0 -> lastDo
+            else -> -1
+        }
+    }
+
     /**
      * Parses a full response string into an Action object for execution.
      * First extracts the action part, then parses it.
@@ -32,12 +58,8 @@ object ActionParser {
         val cleanResponse = response.trim()
         Log.d("ActionParser", "Parsing: $cleanResponse")
 
-        // First, extract just the action part
-        val actionStart = when {
-            cleanResponse.contains("do(") -> cleanResponse.indexOf("do(")
-            cleanResponse.contains("finish(") -> cleanResponse.indexOf("finish(")
-            else -> -1
-        }
+        // Extract the LAST action (model may output fallback after "上一个动作执行失败")
+        val actionStart = findActionStart(cleanResponse)
 
         val actionString = if (actionStart >= 0) {
             cleanResponse.substring(actionStart).trim()
@@ -89,14 +111,7 @@ object ActionParser {
 
     /**
      * Parses response into thinking and ParsedAction for display.
-     * Extracts only the FIRST complete do(...) or finish(...) block.
-     * Any content after the first action block is ignored.
-     *
-     * Examples:
-     * - "Thinking do(action=\"Tap\", element=[500, 750])" -> ("Thinking", ParsedAction(TAP, ...))
-     * - "do(action=\"Back\")" -> ("", ParsedAction(BACK, ...))
-     * - "finish(message=\"Done\")" -> ("", ParsedAction(FINISH, ...))
-     * - "No action here" -> ("No action here", null)
+     * Extracts the LAST complete do(...) or finish(...) block (same as extractActionString).
      *
      * @param content The raw response content
      * @return Pair of (thinking, ParsedAction?) where ParsedAction is null if no valid action found
@@ -104,12 +119,7 @@ object ActionParser {
     fun parseResponsePartsToParsedAction(content: String): Pair<String, ParsedAction?> {
         val trimmedContent = content.trim()
 
-        // Find the start of action: "do(" or "finish("
-        val actionStart = when {
-            trimmedContent.contains("do(") -> trimmedContent.indexOf("do(")
-            trimmedContent.contains("finish(") -> trimmedContent.indexOf("finish(")
-            else -> -1
-        }
+        val actionStart = findActionStart(trimmedContent)
 
         if (actionStart < 0) {
             // No action found, treat entire content as thinking
@@ -142,21 +152,19 @@ object ActionParser {
     }
 
     /**
-     * Extracts the raw action string from content for logging purposes.
-     * Returns the first complete do(...) or finish(...) block, or empty string if not found.
+     * Extracts the raw action string from content for logging and execution.
+     * Returns the LAST complete do(...) or finish(...) block, or empty string if not found.
      *
-     * This is useful for logging and storing raw action strings without parsing.
+     * Uses LAST occurrence because when previous action fails, the model often outputs:
+     * "do(action=\"Launch\", app=\"抖音\")\n上一个动作执行失败。\ndo(action=\"Tap\", element=[435,856])"
+     * We should execute the Tap (the fallback), not the failed Launch.
      *
      * @param content The raw response content
      * @return The extracted action string, or empty string if no action found
      */
     fun extractActionString(content: String): String {
         val trimmedContent = content.trim()
-        val actionStart = when {
-            trimmedContent.contains("do(") -> trimmedContent.indexOf("do(")
-            trimmedContent.contains("finish(") -> trimmedContent.indexOf("finish(")
-            else -> -1
-        }
+        val actionStart = findActionStart(trimmedContent)
 
         if (actionStart < 0) return ""
 
@@ -181,9 +189,8 @@ object ActionParser {
     private fun parseToParsedAction(actionString: String): ParsedAction? {
         val cleanAction = actionString.trim()
 
-        // 1. Try to match finish(message="...")
-        val finishRegex = Regex("""finish\s*\(\s*message\s*=\s*["'](.*?)["']\s*\)""", RegexOption.IGNORE_CASE)
-        finishRegex.find(cleanAction)?.let {
+        // 1. Try to match finish(message="...") - [\s\S]*? 支持 message 内换行
+        FINISH_REGEX.find(cleanAction)?.let {
             return ParsedAction(
                 type = ActionType.FINISH,
                 rawParams = mapOf("message" to it.groupValues[1]),
@@ -192,8 +199,7 @@ object ActionParser {
         }
 
         // 2. Try to match do(action="...", ...)
-        val doRegex = Regex("""do\s*\((.*)\)""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        val doMatch = doRegex.find(cleanAction)
+        val doMatch = DO_REGEX.find(cleanAction)
 
         if (doMatch != null) {
             val args = doMatch.groupValues[1]
@@ -284,15 +290,13 @@ object ActionParser {
         val cleanAction = actionString.trim()
         Log.d("ActionParser", "Parsing action: $cleanAction")
 
-        // 1. Try to match finish(message="...")
-        val finishRegex = Regex("""finish\s*\(\s*message\s*=\s*["'](.*?)["']\s*\)""", RegexOption.IGNORE_CASE)
-        finishRegex.find(cleanAction)?.let {
+        // 1. Try to match finish(message="...") - DOT_MATCHES_ALL 支持 message 内换行
+        FINISH_REGEX.find(cleanAction)?.let {
             return Action.Finish(it.groupValues[1])
         }
 
         // 2. Try to match do(action="...", ...)
-        val doRegex = Regex("""do\s*\((.*)\)""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        val doMatch = doRegex.find(cleanAction)
+        val doMatch = DO_REGEX.find(cleanAction)
 
         if (doMatch != null) {
             val args = doMatch.groupValues[1]

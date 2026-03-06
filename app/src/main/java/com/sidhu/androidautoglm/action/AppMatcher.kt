@@ -12,6 +12,25 @@ import android.util.Log
 object AppMatcher {
 
     /**
+     * Known app aliases for common Chinese apps.
+     * Used as fallback when launcher query doesn't return the app (e.g. OEM restrictions).
+     */
+    private val knownAliases = mapOf(
+        "抖音" to "com.ss.android.ugc.aweme",
+        "抖音短视频" to "com.ss.android.ugc.aweme",
+        "抖音极速版" to "com.ss.android.ugc.aweme.lite",
+        "微信" to "com.tencent.mm",
+        "QQ" to "com.tencent.mobileqq",
+        "淘宝" to "com.taobao.taobao",
+        "支付宝" to "com.eg.android.AlipayGphone",
+        "美团" to "com.sankuai.meituan",
+        "京东" to "com.jingdong.app.mall",
+        "拼多多" to "com.xunmeng.pinduoduo",
+        "百度" to "com.baidu.searchbox",
+        "高德地图" to "com.autonavi.minimap"
+    )
+
+    /**
      * Data source interface for providing key-value mappings.
      * Implementations (e.g., [AppMapper]) provide the actual data.
      */
@@ -48,34 +67,38 @@ object AppMatcher {
      * @return The corresponding package name, or null if not found
      */
     fun getPackageName(appName: String): String? {
-        Log.d("AppMatcher", "Looking up package name for: '$appName'")
+        Log.d("AppMatcher", "Looking up: '$appName'")
 
+        val normalized = normalizeName(appName)
         val source = dataSource
         if (source == null) {
-            Log.e("AppMatcher", "DataSource not initialized. Call init() first.")
+            Log.w("AppMatcher", "dataSource is null")
             return null
         }
 
-        // First attempt: find in current cache
+        // For "抖音": prefer TikTok from launcher if installed
+        if (normalized == "抖音" || normalized.contains("抖音")) {
+            source.map.entries.find { it.key.equals("TikTok", ignoreCase = true) }?.let { return it.value }
+            (source as? AppMapper)?.refreshLauncherApps()
+            source.map.entries.find { it.key.equals("TikTok", ignoreCase = true) }?.let { return it.value }
+        }
+
+        // Check launcher/datasource first
         var result = findValue(source.map, appName)
+        if (result == null) {
+            (source as? AppMapper)?.refreshLauncherApps()
+            result = findValue(source.map, appName)
+        }
         if (result != null) {
-            Log.d("AppMatcher", "✓ Found (cached): '$appName' → '$result'")
+            Log.d("AppMatcher", "Found: '$appName' -> '$result'")
             return result
         }
 
-        // Not found in cache - refresh and try again
-        Log.d("AppMatcher", "Not found in cache, refreshing data source...")
-        (source as? AppMapper)?.refreshLauncherApps()
+        knownAliases[normalized]?.let { return it }
+        knownAliases.entries.find { it.key.contains(normalized) || normalized.contains(it.key) }?.let { return it.value }
 
-        // Second attempt: find with refreshed data
-        result = findValue(source.map, appName)
-        if (result != null) {
-            Log.i("AppMatcher", "✓ Found (after refresh): '$appName' → '$result'")
-        } else {
-            Log.w("AppMatcher", "✗ NOT FOUND: '$appName'")
-        }
-
-        return result
+        Log.w("AppMatcher", "Not found: '$appName'")
+        return null
     }
 
     /**
@@ -120,32 +143,58 @@ object AppMatcher {
             return exactMatch.value
         }
 
-        // 2. Jaccard similarity (order-independent word matching)
-        val inputWords = normalizedKey.split(" ").map { it.lowercase() }.filter { it.isNotBlank() }
+        // Check if input contains Chinese characters - skip Jaccard for Chinese
+        val isChineseInput = containsChinese(normalizedKey)
 
-        if (inputWords.size > 1) {
-            // Find all candidates with their Jaccard similarity
-            val jaccardCandidates = map.entries.mapNotNull { entry ->
-                val keyWords = entry.key.split(" ").map { it.lowercase() }
-                val similarity = calculateJaccard(inputWords, keyWords)
-                if (similarity >= 0.5) {  // Threshold: at least 50% overlap
-                    MatchCandidate(entry, similarity)
-                } else {
-                    null
+        // 2. Jaccard similarity (order-independent word matching) - skip for Chinese
+        if (!isChineseInput) {
+            val inputWords = normalizedKey.split(" ").map { it.lowercase() }.filter { it.isNotBlank() }
+
+            if (inputWords.size > 1) {
+                // Find all candidates with their Jaccard similarity
+                val jaccardCandidates = map.entries.mapNotNull { entry ->
+                    val keyWords = entry.key.split(" ").map { it.lowercase() }
+                    val similarity = calculateJaccard(inputWords, keyWords)
+                    if (similarity >= 0.5) {  // Threshold: at least 50% overlap
+                        MatchCandidate(entry, similarity)
+                    } else {
+                        null
+                    }
+                }
+
+                // Select the candidate with the highest Jaccard similarity
+                val bestJaccardMatch = jaccardCandidates.maxByOrNull { it.score }
+                if (bestJaccardMatch != null) {
+                    val normalizedLog = if (key != normalizedKey) " (normalized: '$normalizedKey')" else ""
+                    Log.d("AppMatcher", "  Match type: Jaccard (score: ${String.format("%.2f", bestJaccardMatch.score)}), input: '$key'$normalizedLog → key: '${bestJaccardMatch.entry.key}'")
+                    return bestJaccardMatch.entry.value
                 }
             }
+        } else {
+            Log.d("AppMatcher", "  Skipping Jaccard for Chinese input: '$normalizedKey'")
+        }
 
-            // Select the candidate with the highest Jaccard similarity
-            val bestJaccardMatch = jaccardCandidates.maxByOrNull { it.score }
-            if (bestJaccardMatch != null) {
-                val normalizedLog = if (key != normalizedKey) " (normalized: '$normalizedKey')" else ""
-                Log.d("AppMatcher", "  Match type: Jaccard (score: ${String.format("%.2f", bestJaccardMatch.score)}), input: '$key'$normalizedLog → key: '${bestJaccardMatch.entry.key}'")
-                return bestJaccardMatch.entry.value
+        // 3. For Chinese: prefix/substring match (e.g. "抖音" matches "抖音短视频")
+        // System app labels may be "抖音短视频" or "抖音极速版" while user says "抖音"
+        if (isChineseInput && normalizedKey.length >= 2) {
+            val substringMatches = map.entries.filter { entry ->
+                entry.key.contains(normalizedKey) || normalizedKey.contains(entry.key)
+            }
+            if (substringMatches.isNotEmpty()) {
+                // Prefer shortest key (most specific, e.g. "抖音" over "抖音短视频" when both match)
+                val best = substringMatches.minByOrNull { it.key.length }!!
+                Log.d("AppMatcher", "  Match type: Chinese prefix/substring, input: '$key' → key: '${best.key}'")
+                return best.value
             }
         }
 
-        // 3. Levenshtein distance (fallback for typos)
-        val levenshteinMatch = findWithLevenshtein(normalizedKey, map)
+        // 4. Levenshtein distance - for English only
+        val levenshteinMatch = if (isChineseInput) {
+            Log.d("AppMatcher", "  Skipping Levenshtein for Chinese input: '$normalizedKey'")
+            null
+        } else {
+            findWithLevenshtein(normalizedKey, map)
+        }
         if (levenshteinMatch != null) {
             val (entry, distance) = levenshteinMatch
             val normalizedLog = if (key != normalizedKey) " (normalized: '$normalizedKey')" else ""
@@ -204,11 +253,14 @@ object AppMatcher {
     }
 
     /**
-     * Find key using Levenshtein distance (edit distance).
-     * Returns the candidate with the smallest edit distance (threshold: max 3 edits).
+     * Find a key using Levenshtein distance (edit distance).
+     * Returns the candidate with the smallest edit distance (threshold: max 2 edits for Chinese, 3 for English).
      *
      * Levenshtein distance measures the minimum number of single-character edits
      * (insertions, deletions, or substitutions) required to change one string into another.
+     *
+     * For Chinese characters, we use a stricter threshold (2) because character-by-character
+     * comparison doesn't make sense for Chinese app names.
      *
      * Examples:
      * - "Chrome" vs "Chrome" → 0
@@ -220,8 +272,35 @@ object AppMatcher {
      * @return Pair of (entry, distance), or null if no match within threshold
      */
     private fun findWithLevenshtein(normalizedKey: String, map: Map<String, String>): Pair<Map.Entry<String, String>, Int>? {
-        val threshold = 3  // Maximum allowed edit operations
+        // For Chinese input, use stricter threshold (2) and skip if length difference is too large
+        val isChineseInput = containsChinese(normalizedKey)
+        val threshold = if (isChineseInput) 2 else 3
 
+        // For Chinese input, also check that length is similar (within 50% difference)
+        if (isChineseInput) {
+            val inputLength = normalizedKey.length
+            val chineseMatches = map.entries.filter { entry ->
+                val keyLength = entry.key.length
+                // Length must be similar for Chinese (within 50%)
+                val lengthRatio = maxOf(inputLength, keyLength).toDouble() / minOf(inputLength, keyLength)
+                lengthRatio <= 1.5
+            }
+
+            if (chineseMatches.isEmpty()) {
+                Log.d("AppMatcher", "  No length-matching Chinese candidates found")
+                return null
+            }
+
+            return chineseMatches
+                .map { entry ->
+                    val distance = levenshtein(normalizedKey.lowercase(), entry.key.lowercase())
+                    entry to distance
+                }
+                .filter { (_, distance) -> distance <= threshold }
+                .minByOrNull { (_, distance) -> distance }
+        }
+
+        // Original logic for English
         return map.entries
             .map { entry ->
                 val distance = levenshtein(normalizedKey.lowercase(), entry.key.lowercase())
@@ -229,6 +308,19 @@ object AppMatcher {
             }
             .filter { (_, distance) -> distance <= threshold }
             .minByOrNull { (_, distance) -> distance }
+    }
+
+    /**
+     * Check if a string contains Chinese (CJK) characters.
+     */
+    private fun containsChinese(str: String): Boolean {
+        return str.any { char ->
+            Character.UnicodeBlock.of(char) == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS ||
+            Character.UnicodeBlock.of(char) == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS ||
+            Character.UnicodeBlock.of(char) == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A ||
+            // Also check for common Chinese punctuation
+            char in listOf('，', '。', '！', '？', '：', '；', '、', '「', '」', '『', '』', '（', '）', '【', '】')
+        }
     }
 
     /**

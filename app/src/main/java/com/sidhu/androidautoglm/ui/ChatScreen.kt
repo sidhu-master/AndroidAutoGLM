@@ -11,10 +11,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.AccessTime
-import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -28,7 +26,6 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -207,26 +204,19 @@ fun ChatScreen(
         }
     }
 
-    // Check service status when app resumes (e.g. returning from Settings)
+    // ON_RESUME 首次进入时也会触发，因此无需额外的 LaunchedEffect(Unit) 重复执行
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                viewModel.checkServiceStatus()
                 viewModel.checkOverlayPermission(context)
                 viewModel.checkBatteryOptimization(context)
+                viewModel.checkShizukuConnection(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
-    }
-
-    // Initial check on composition
-    LaunchedEffect(Unit) {
-        viewModel.checkServiceStatus()
-        viewModel.checkOverlayPermission(context)
-        viewModel.checkBatteryOptimization(context)
     }
 
     // Handle back button press when fullscreen image is shown
@@ -368,7 +358,7 @@ fun ChatScreen(
                     reverseLayout = false,
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    items(uiState.messages) { message ->
+                    items(uiState.messages, key = { it.timestamp }) { message ->
                         MessageItem(
                             message = message,
                             onShowImage = { bitmap -> fullscreenImage = bitmap }
@@ -378,6 +368,10 @@ fun ChatScreen(
             }
 
             // Input Area (Bottom)
+            // Check Shizuku permission status
+            val needsShizukuPermission = !uiState.shizukuConnected
+            val showPermissionReminder = needsShizukuPermission
+
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -386,7 +380,61 @@ fun ChatScreen(
                 shadowElevation = 8.dp,
                 color = Color(0xFFF5F5F5) // Very Light Gray background
             ) {
-                Row(
+                if (showPermissionReminder) {
+                    // Shizuku 未连接时，提示用户打开 Shizuku
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) {
+                                // Open Shizuku app
+                                try {
+                                    val shizukuIntent = context.packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
+                                    if (shizukuIntent != null) {
+                                        shizukuIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        context.startActivity(shizukuIntent)
+                                    } else {
+                                        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://play.google.com/store/apps/details?id=moe.shizuku.privileged.api"))
+                                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        context.startActivity(intent)
+                                    }
+                                } catch (e: Exception) {
+                                    try {
+                                        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://play.google.com/store/apps/details?id=moe.shizuku.privileged.api"))
+                                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {}
+                                }
+                            }
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Settings,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.shizuku_permission_required),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.tap_to_enable),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                } else {
+                    Row(
                     modifier = Modifier
                         .padding(horizontal = 8.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -547,7 +595,7 @@ fun ChatScreen(
                     }
 
                     // Send Button
-                    val isInputValid by remember(inputText) { derivedStateOf { inputText.isNotBlank() } }
+                    val isInputValid = inputText.isNotBlank()
                     IconButton(
                         onClick = {
                             viewModel.sendMessage(inputText)
@@ -569,6 +617,7 @@ fun ChatScreen(
                             )
                         }
                     }
+                }
                 }
             }
         }
@@ -596,7 +645,7 @@ fun ChatScreen(
                 },
                 onSend = {
                     if (voiceResultText.isNotBlank()) {
-                        viewModel.sendMessage(voiceResultText)
+                        viewModel.sendMessage(voiceResultText, isVoiceInput = true)
                     }
                     showVoiceReview = false
                     voiceResultText = ""
@@ -605,8 +654,8 @@ fun ChatScreen(
         }
 
         // Error / Service Check Overlay (Topmost)
-        // Error / Service Check Overlay (Topmost)
-        if (uiState.error != null || uiState.missingAccessibilityService || uiState.missingOverlayPermission) {
+        // Note: Accessibility service reminder is now shown in input area when Shizuku is not connected
+        if (uiState.error != null || uiState.missingOverlayPermission) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -622,41 +671,6 @@ fun ChatScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     LanguageSwitchButton()
-                    if (uiState.missingAccessibilityService) {
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 32.dp),
-                            color = MaterialTheme.colorScheme.errorContainer,
-                            shape = MaterialTheme.shapes.medium,
-                            shadowElevation = 8.dp
-                        ) {
-                            Box(modifier = Modifier.fillMaxWidth()) {
-                                Column(
-                                    modifier = Modifier.padding(24.dp).fillMaxWidth(),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Text(
-                                        text = stringResource(R.string.accessibility_error),
-                                        color = MaterialTheme.colorScheme.onErrorContainer,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                    Spacer(modifier = Modifier.height(16.dp))
-                                    Button(
-                                        onClick = {
-                                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                            context.startActivity(intent)
-                                        }
-                                    ) {
-                                        Text(stringResource(R.string.enable_action))
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     if (uiState.missingOverlayPermission) {
                         Surface(
                             modifier = Modifier

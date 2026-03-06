@@ -10,7 +10,15 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
 import android.widget.Toast
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -22,6 +30,9 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -52,8 +63,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -64,12 +79,15 @@ import com.sidhu.androidautoglm.utils.SpeechRecognizerManager
 import com.sidhu.androidautoglm.utils.SherpaModelManager
 import com.sidhu.androidautoglm.ui.RecordingIndicator
 import com.sidhu.androidautoglm.ui.VoiceReviewOverlay
+import com.sidhu.androidautoglm.ui.model.FormattedContent
+import com.sidhu.androidautoglm.action.ActionType
 import kotlin.math.roundToInt
 
 /**
  * Floating window content composable.
- * Displays the floating window UI with status, action buttons, and voice interaction.
+ * Displays the floating window UI with status, task list, thinking process, and voice interaction.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FloatingWindowContent(
     floatingWindowController: FloatingWindowController,
@@ -81,9 +99,10 @@ fun FloatingWindowContent(
     // Reactively collect the floating window state
     val state by floatingWindowController.stateFlow.collectAsState()
 
-    // Extract status, isTaskRunning, and onStopCallback from current state
+    // Extract state from Visible or TaskCompleted
     val status = when (val s = state) {
         is FloatingWindowState.Visible -> s.statusText
+        is FloatingWindowState.TaskCompleted -> s.statusText
         else -> ""
     }
     val isTaskRunning = when (val s = state) {
@@ -94,9 +113,24 @@ fun FloatingWindowContent(
         is FloatingWindowState.Visible -> s.onStopCallback
         else -> null
     }
+    val taskList = when (val s = state) {
+        is FloatingWindowState.Visible -> s.taskList
+        is FloatingWindowState.TaskCompleted -> s.taskList
+        else -> emptyList()
+    }
+    val thinkingLines = when (val s = state) {
+        is FloatingWindowState.Visible -> s.thinkingLines
+        is FloatingWindowState.TaskCompleted -> s.thinkingLines
+        else -> emptyList()
+    }
+    val actionContent = when (val s = state) {
+        is FloatingWindowState.Visible -> s.actionContent
+        is FloatingWindowState.TaskCompleted -> s.actionContent
+        else -> null
+    }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-
+    // 窗口已用 MATCH_PARENT 撑满宽度，Surface 用 fillMaxWidth 填满
     // Voice State
     var voiceResultText by remember { mutableStateOf("") }
     var showVoiceReview by remember { mutableStateOf(false) }
@@ -160,54 +194,63 @@ fun FloatingWindowContent(
     MaterialTheme {
         Surface(
             modifier = Modifier
-                .width(350.dp) // Fixed width for consistent dragging
+                .fillMaxWidth()
+                .heightIn(min = 420.dp)
                 .pointerInput(Unit) {
                     detectDragGestures { change, dragAmount ->
                         change.consume()
                         onDrag(dragAmount.x, dragAmount.y)
                     }
-                }
-                .padding(16.dp),
+                },
             shape = RoundedCornerShape(24.dp),
-            color = Color.White,
-            shadowElevation = 8.dp
+            color = Color.Black.copy(alpha = 0.5f),
+            contentColor = Color.White,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .padding(16.dp)
-                    .fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .fillMaxWidth()
+                    .heightIn(min = 388.dp)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    val isError = status.startsWith("Error") ||
-                        status.startsWith("出错") ||
-                        status.startsWith("运行异常") ||
-                        status.startsWith("未输入正确的文本")
-                    val titleText = when {
-                        isTaskRunning -> stringResource(R.string.fw_running)
-                        isError -> stringResource(R.string.fw_error_title)
-                        else -> stringResource(R.string.fw_ready_title)
-                    }
-                    val titleColor = when {
-                        isTaskRunning -> Color.Gray
-                        isError -> MaterialTheme.colorScheme.error
-                        else -> Color(0xFF4CAF50)
+                // Title + Status + Action buttons row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        val isError = status.startsWith("Error") ||
+                            status.startsWith("出错") ||
+                            status.startsWith("运行异常") ||
+                            status.startsWith("未输入正确的文本")
+                        val titleText = when {
+                            isTaskRunning -> stringResource(R.string.fw_running)
+                            isError -> stringResource(R.string.fw_error_title)
+                            else -> stringResource(R.string.fw_ready_title)
+                        }
+                        val titleColor = when {
+                            isTaskRunning -> Color.White.copy(alpha = 0.8f)
+                            isError -> Color(0xFFFFCDD2)
+                            else -> Color(0xFF81C784)
+                        }
+
+                        Text(
+                            text = titleText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = titleColor
+                        )
+                        Text(
+                            text = status,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            modifier = Modifier.basicMarquee()
+                        )
                     }
 
-                    Text(
-                        text = titleText,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = titleColor
-                    )
-                    Text(
-                        text = status,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1
-                    )
-                }
-
-                // Right side action button
+                    // Right side action button
                 if (isTaskRunning || onStopCallback != null) {
                      Button(
                         onClick = {
@@ -239,8 +282,8 @@ fun FloatingWindowContent(
                             }
                         },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFFFEBEE),
-                            contentColor = Color.Red
+                            containerColor = Color.White.copy(alpha = 0.25f),
+                            contentColor = Color(0xFFFFCDD2)
                         ),
                         shape = RoundedCornerShape(50),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
@@ -254,7 +297,7 @@ fun FloatingWindowContent(
                         Text(stringResource(R.string.fw_stop))
                     }
                 } else {
-                    // Not running: Show Mic Button AND Return Button (maybe?)
+                    // Not running: Show Mic Button AND Return Button
                     // Or just Mic button and if clicked -> text input?
                     // User requested "Send new task via voice".
 
@@ -273,7 +316,7 @@ fun FloatingWindowContent(
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
-                                .background(Color(0xFFE3F2FD), CircleShape)
+                                .background(Color.White.copy(alpha = 0.25f), CircleShape)
                                 .pointerInput(isModelReady, modelState) {
                                      if (!isModelReady || modelState is SherpaModelManager.ModelState.Error || modelState is SherpaModelManager.ModelState.NotInitialized) {
                                         detectTapGestures(
@@ -380,7 +423,7 @@ fun FloatingWindowContent(
                              Icon(
                                 Icons.Default.Mic,
                                 contentDescription = null,
-                                tint = Color(0xFF2196F3),
+                                tint = Color.White,
                                 modifier = Modifier.size(24.dp)
                             )
                         }
@@ -404,8 +447,8 @@ fun FloatingWindowContent(
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFE3F2FD),
-                                contentColor = Color(0xFF2196F3)
+                                containerColor = Color.White.copy(alpha = 0.25f),
+                                contentColor = Color.White
                             ),
                             shape = RoundedCornerShape(50),
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
@@ -420,6 +463,206 @@ fun FloatingWindowContent(
                         }
                     }
                 }
+                }
+
+                // 任务清单
+                if (taskList.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = stringResource(R.string.fw_task_list),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.8f)
+                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        taskList.take(8).forEach { line ->
+                            val (icon, cleanText) = parseTaskLine(line)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = icon,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.width(18.dp)
+                                )
+                                Text(
+                                    text = cleanText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.9f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 思考过程：优先显示 DisplayActionCard 内容，否则显示思考文本
+                if (actionContent != null || thinkingLines.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = stringResource(R.string.fw_thinking),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.8f)
+                    )
+                    if (actionContent != null) {
+                        FloatingActionCard(
+                            action = actionContent,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp)
+                        )
+                    } else {
+                        VerticalMarqueeText(
+                            lines = thinkingLines,
+                            visibleLines = 5,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 悬浮窗内显示的动作卡片（适配深色半透明背景） */
+@Composable
+private fun FloatingActionCard(
+    action: FormattedContent.ActionContent,
+    modifier: Modifier = Modifier
+) {
+    val backgroundColor = Color.White.copy(alpha = 0.2f)
+    val textColor = when (action.actionType) {
+        ActionType.FINISH -> Color(0xFF4CAF50)   // 绿
+        ActionType.UNKNOWN -> Color(0xFFD32F2F)  // 红
+        else -> Color.White
+    }
+    Surface(
+        color = backgroundColor,
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (action.icon != null) {
+                Icon(
+                    imageVector = action.icon,
+                    contentDescription = null,
+                    tint = textColor,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            Text(
+                text = action.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = textColor
+            )
+        }
+    }
+}
+
+private fun parseTaskLine(line: String): Pair<String, String> {
+    val trimmed = line.trim()
+    return when {
+        trimmed.startsWith("- [x]") || trimmed.startsWith("- [X]") ->
+            "✅" to trimmed.removePrefix("- [x]").removePrefix("- [X]").trimStart()
+        trimmed.startsWith("- [/]") ->
+            "🔄" to trimmed.removePrefix("- [/]").trimStart()
+        trimmed.startsWith("- [ ]") ->
+            "⬜" to trimmed.removePrefix("- [ ]").trimStart()
+        trimmed.startsWith("- [") -> {
+            val afterBracket = trimmed.indexOf(']')
+            if (afterBracket > 0) "⬜" to trimmed.substring(afterBracket + 1).trimStart()
+            else "•" to trimmed
+        }
+        else -> "•" to trimmed
+    }
+}
+
+/**
+ * 3-line visible area with vertical auto-scroll when content exceeds visible lines.
+ * Scrolls upward continuously and loops back.
+ */
+@Composable
+private fun VerticalMarqueeText(
+    lines: List<String>,
+    visibleLines: Int = 3,
+    modifier: Modifier = Modifier
+) {
+    if (lines.isEmpty()) return
+
+    val lineHeightDp = 18.dp
+    val spacingDp = 2.dp
+    val totalVisibleHeightDp = lineHeightDp * visibleLines + spacingDp * (visibleLines - 1)
+
+    if (lines.size <= visibleLines) {
+        Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(spacingDp)) {
+            lines.forEach { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = Color.White.copy(alpha = 0.9f),
+                    lineHeight = lineHeightDp.value.sp,
+                    modifier = Modifier.height(lineHeightDp)
+                )
+            }
+        }
+        return
+    }
+
+    val density = LocalDensity.current
+    val singleRowHeightPx = with(density) { (lineHeightDp + spacingDp).toPx() }
+    val totalContentPx = singleRowHeightPx * lines.size
+
+    val infiniteTransition = rememberInfiniteTransition(label = "thinking_scroll")
+    val scrollOffset by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = totalContentPx,
+        animationSpec = infiniteRepeatable(
+            animation = tween(
+                durationMillis = lines.size * 2000,
+                easing = LinearEasing
+            ),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "scroll_offset"
+    )
+
+    Box(
+        modifier = modifier
+            .height(totalVisibleHeightDp)
+            .clipToBounds()
+    ) {
+        Column(
+            modifier = Modifier.offset { IntOffset(0, -scrollOffset.toInt()) },
+            verticalArrangement = Arrangement.spacedBy(spacingDp)
+        ) {
+            // Render lines twice for seamless looping
+            val doubled = lines + lines
+            doubled.forEach { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = Color.White.copy(alpha = 0.9f),
+                    lineHeight = lineHeightDp.value.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(lineHeightDp)
+                )
             }
         }
     }

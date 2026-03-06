@@ -1,4 +1,4 @@
-package com.sidhu.androidautoglm.ui.util
+package com.sidhu.androidautoglm.utils
 
 import android.content.Context
 import com.sidhu.androidautoglm.R
