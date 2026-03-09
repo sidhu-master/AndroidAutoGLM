@@ -19,6 +19,9 @@ dependencyResolutionManagement {
 rootProject.name = "AndroidAutoGLM"
 include(":app")
 
+// Shizuku 源码位于 Shizuku/，用于内置无线调试启动。详见 Shizuku/README_EMBED.md
+// 构建: cd Shizuku && ./gradlew :manager:assembleDebug
+
 // 使用 composite build 引入 AutoInput
 includeBuild("../AutoInput") {
     dependencySubstitution {
