@@ -76,6 +76,18 @@ class ActionExecutor(private val service: IGLMService) {
                 Log.i("ActionExecutor", "Task Finished: ${action.message}")
                 true
             }
+            is Action.TakeOver -> {
+                Log.i("ActionExecutor", "TakeOver: ${action.message} (由 ChatViewModel 暂停任务，用户操作后点击继续)")
+                true  // ChatViewModel 已处理暂停，此处直接返回
+            }
+            Action.Interact -> {
+                Log.i("ActionExecutor", "Interact: 由 ChatViewModel 暂停任务，用户操作后点击继续")
+                true  // ChatViewModel 已处理暂停，此处直接返回
+            }
+            Action.Note, is Action.CallApi -> {
+                // 在 ChatViewModel 内处理，此处不应到达；若到达则视为成功
+                true
+            }
             is Action.Error -> {
                 Log.e("ActionExecutor", "Error: ${action.reason}")
                 false

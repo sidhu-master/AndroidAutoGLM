@@ -86,6 +86,18 @@ object AppMapper : AppMatcher.DataSource {
     }
 
     /**
+     * 获取本机已安装应用名称列表，供主模型分析任务时选择目标应用。
+     * 返回格式：逗号分隔的应用名，如 "美团, 饿了么, 微信, 支付宝, ..."
+     * 最多返回 150 个，避免 prompt 过长。
+     */
+    fun getInstalledAppNamesForPrompt(): String {
+        return appMap.keys
+            .sorted()
+            .take(150)
+            .joinToString("、")
+    }
+
+    /**
      * Refresh the launcher app mapping.
      * This method rebuilds the entire mapping from scratch - no cache.
      * Call on background thread (Dispatchers.IO) to avoid blocking.

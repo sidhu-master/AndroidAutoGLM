@@ -22,8 +22,6 @@ import com.sidhu.androidautoglm.utils.ShizukuHelper
 import com.sidhu.androidautoglm.utils.ActionManager
 import com.sidhu.androidautoglm.data.TaskEndState
 import com.sidhu.androidautoglm.data.entity.Conversation as DbConversation
-import com.sidhu.androidautoglm.memory.MemoryManager
-import com.sidhu.androidautoglm.memory.TaskPlanParser
 import java.text.SimpleDateFormat
 import java.util.Date
 import android.os.Build
@@ -44,10 +42,12 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.channels.Channel
 
 import com.sidhu.androidautoglm.BuildConfig
 import com.sidhu.androidautoglm.data.AppDatabase
 import com.sidhu.androidautoglm.data.ImageStorage
+import com.sidhu.androidautoglm.memory.MemoryManager
 import com.sidhu.androidautoglm.data.repository.ConversationRepository
 import com.sidhu.androidautoglm.ui.model.toUiMessages
 import com.sidhu.androidautoglm.ui.model.FormattedContent
@@ -225,11 +225,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val preferencesManager by lazy {
         com.sidhu.androidautoglm.data.preferences.PreferencesManager(getApplication())
     }
-
-    // Memory Manager for long-term task support
-    private val memoryManager by lazy {
-        MemoryManager(getApplication()).apply { init() }
-    }
+    private val memoryManager by lazy { MemoryManager(getApplication()) }
 
     init {
         // Load config: support legacy (single model) and new (master/sub) structure
@@ -292,14 +288,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // Initialize ActionManager
-        val shizukuEnabled = prefs.getBoolean("shizuku_mode_enabled", false)
-        ActionManager.init(getApplication(), shizukuEnabled)
+        ActionManager.init(getApplication())
 
         // 收集语音命令（Shizuku 服务）
         viewModelScope.launch {
             AutoGLMShizukuService.voiceCommandFlow.collect { command ->
-                Log.d("ChatViewModel", "Received voice command from Shizuku: $command")
-                sendMessage(command, isVoiceInput = true)
+                Log.d("ChatViewModel", "Received voice command from Shizuku (wake-up): $command")
+                sendMessage(command, isVoiceInput = true, startNewConversation = true)
             }
         }
 
@@ -366,6 +361,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // Job to manage the current task lifecycle - allows cancellation
     private var currentTaskJob: kotlinx.coroutines.Job? = null
+
+    // 暂停状态：任务循环会在每次迭代开始处检查，暂停时等待用户点击继续
+    private val _isPaused = MutableStateFlow(false)
 
     // Conversation history for the API - thread-safe (accessed from both Main and IO)
     private val apiHistory = java.util.Collections.synchronizedList(mutableListOf<Message>())
@@ -512,8 +510,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun checkShizukuConnection(context: Context) {
-        val shizukuModeEnabled = prefs.getBoolean("shizuku_mode_enabled", false)
-        val isShizukuConnected = shizukuModeEnabled && ShizukuHelper.isShizukuAvailable() && ShizukuHelper.checkPermission(context)
+        val isShizukuConnected = ShizukuHelper.isShizukuAvailable() && ShizukuHelper.checkPermission(context)
         _uiState.value = _uiState.value.copy(shizukuConnected = isShizukuConnected)
     }
 
@@ -537,6 +534,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // which also launches the main app after the window is fully hidden
     }
 
+    /** 暂停任务（循环会在每次迭代开始处等待） */
+    private fun pauseTask() {
+        _isPaused.value = true
+        ActionManager.setPaused(true)
+        ActionManager.updateStatus(getApplication<Application>().getString(R.string.status_paused))
+    }
+
+    /** 继续任务 */
+    private fun resumeTask() {
+        _isPaused.value = false
+        ActionManager.setPaused(false)
+        ActionManager.updateStatus(getApplication<Application>().getString(R.string.status_thinking))
+    }
+
     fun clearMessages() {
         _uiState.value = _uiState.value.copy(messages = emptyList())
         apiHistory.clear()
@@ -557,12 +568,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // _uiState.value = _uiState.value.copy(messages = listOf(UiMessage("assistant", getApplication<Application>().getString(R.string.welcome_message))))
     }
 
-    fun sendMessage(text: String, isVoiceInput: Boolean = false) {
-        Log.d("AutoGLM_Trace", "sendMessage called with text: $text, isVoiceInput: $isVoiceInput")
+    fun sendMessage(text: String, isVoiceInput: Boolean = false, startNewConversation: Boolean = false) {
+        Log.d("AutoGLM_Trace", "sendMessage called with text: $text, isVoiceInput=$isVoiceInput, startNewConversation=$startNewConversation")
         // Skip blank check
         if (text.isBlank()) return
         
         ensureModelClients()
+
+        // 语音唤醒启动的任务放入新会话
+        if (startNewConversation) {
+            viewModelScope.launch {
+                val newId = conversationUseCase.createConversation()
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(
+                        activeConversationId = newId,
+                        messages = emptyList()
+                    )
+                    preferencesManager.saveCurrentConversationId(newId)
+                }
+                doSendMessage(text, isVoiceInput)
+            }
+            return
+        }
+        doSendMessage(text, isVoiceInput)
+    }
+
+    private fun doSendMessage(text: String, isVoiceInput: Boolean) {
 
         val effectiveSub = _uiState.value.effectiveSubConfig
         val masterKey = if (_uiState.value.masterApiKey.isBlank()) BuildConfig.MINIMAX_API_KEY else _uiState.value.masterApiKey
@@ -605,9 +636,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         currentTaskJob = viewModelScope.launch(Dispatchers.IO) {
             Log.d("AutoGLM_Debug", "Coroutine started, isVoiceInput=$isVoiceInput")
 
+            // 立即显示悬浮窗和「审查任务中」，再执行后续耗时操作
+            ActionManager.resetFloatingWindow()
+            _isPaused.value = false
+            ActionManager.showFloatingWindow(
+                onStop = { stopTask() },
+                isRunning = true,
+                onPauseResume = { if (_isPaused.value) resumeTask() else pauseTask() }
+            )
+            // 等待悬浮窗控制器就绪（Shizuku 模式下异步创建），再更新状态
+            // 任务清单等主AI审查完成后再更新，避免先显示原始语音再替换
+            delay(120)
+            ActionManager.updateStatus(getApplication<Application>().getString(R.string.status_reviewing_task))
+
+            val isAppInForeground = if (DEBUG_MODE) false else AppStateTracker.isAppInForeground(getApplication())
+            if (isAppInForeground) {
+                ActionManager.goHome()
+            }
+
             // Refresh app mapping before each request
             AppMapper.refreshLauncherApps()
 
+            val isExistingConversation = _uiState.value.activeConversationId != null
             val ensuredConversationId = _uiState.value.activeConversationId ?: run {
                 val createdId = conversationUseCase.createConversation()
                 withContext(Dispatchers.Main) {
@@ -626,159 +676,124 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // Start new conversation with system prompt
-            Log.d("AutoGLM_Debug", "Starting new conversation history")
+            // 纯子AI：系统提示 + 截图直送，模型输出 element=[x,y] 坐标
+            // 新建会话不带历史记忆；同一会话内（如悬浮窗语音续发）带上本次会话记忆
+            Log.d("AutoGLM_Debug", "Starting new conversation history (sub-AI only)")
             apiHistory.clear()
 
-            // Add System Prompt with Date matching Python logic
             val dateFormat = SimpleDateFormat("yyyy年MM月dd日 EEEE", Locale.getDefault())
             val dateStr = getApplication<Application>().getString(R.string.prompt_date_prefix) + dateFormat.format(Date())
-
-            // Use MemoryManager to assemble system prompt
-            val memoryPrompt = memoryManager.assembleSystemPrompt()
-            val fullSystemPrompt = buildString {
-                append(dateStr).append("\n\n")
-                append(memoryPrompt).append("\n\n")
-                append(ModelClient.TASK_PLAN_INSTRUCTION)
+            val sessionMemory = if (isExistingConversation) memoryManager.loadTodayAndYesterdayMemory() else ""
+            val systemContent = buildString {
+                append(dateStr).append("\n").append(ModelClient.SYSTEM_PROMPT)
+                if (sessionMemory.isNotBlank()) {
+                    append("\n\n【本会话记忆】\n").append(sessionMemory)
+                }
             }
-            apiHistory.add(Message("system", fullSystemPrompt))
-            Log.d("AutoGLM_Debug", "Assembled system prompt from memory files")
+            apiHistory.add(Message("system", systemContent))
 
             var currentPrompt = text
             var step = 0
-            // Use large max steps to support long-running tasks
-            // The task will continue until AI calls finish() action
             val maxSteps = 100
-            // Max consecutive sub-steps before master re-engages to check progress
-            val maxSubSteps = 5
-            var subStepsCount = 0
-            // 卡住检测：记录最近动作字符串，连续 3 次相同则判定卡住
-            val recentActionStrings = mutableListOf<String>()
+            val summarizeInterval = 5
+            // Note 缓冲区：记录页面截图，供 Call_API 总结
+            val noteBuffer = mutableListOf<Bitmap>()
+            // Call_API 异步总结完成后的结果，下次迭代注入
+            val callApiSummaryChannel = Channel<String>(1)
 
-            // Check if app is in foreground (used for both goHome and screenshot decisions)
-            val isAppInForeground = if (DEBUG_MODE) false else AppStateTracker.isAppInForeground(getApplication())
             Log.d("AutoGLM_Trace", "App in foreground: $isAppInForeground")
 
-            // Reset floating window state for new task
-            ActionManager.resetFloatingWindow()
-
-            // Go home if app is in foreground
-            if (isAppInForeground) {
-                ActionManager.goHome()
+            var isFinished = false
+            val client = modelClient
+            if (client == null) {
+                postError("请先在设置中配置子模型 API")
+                return@launch
             }
 
-            // Show floating window (works for both accessibility and Shizuku modes)
-            ActionManager.showFloatingWindow(onStop = { stopTask() }, isRunning = true)
-
-            // Initialize task list with the user's request so at least 1 item is always visible
-            var currentTaskList = listOf("- [/] $text")
-            ActionManager.updateTaskList(currentTaskList)
-
-            var isFinished = false
+            // 主模型审查任务：纠错字、整理、根据本机应用选择目标 App
+            val masterClient = masterModelClient
+            if (masterClient != null && text.isNotBlank()) {
+                val installedApps = AppMapper.getInstalledAppNamesForPrompt()
+                val refined = reviewTask(masterClient, text, installedApps)
+                if (refined != null && !refined.startsWith("Error") && refined.isNotBlank()) {
+                    currentPrompt = stripThinkTags(refined).trim()
+                    if (currentPrompt.isNotEmpty()) {
+                        Log.d("AutoGLM_Debug", "Task reviewed: $text -> $currentPrompt")
+                    }
+                }
+            }
+            ActionManager.updateTaskList(listOf(stripThinkTags(currentPrompt).takeIf { it.isNotEmpty() } ?: currentPrompt))
 
             try {
-                while (isActive && step < maxSteps) {
+                loop@ while (isActive && step < maxSteps) {
+                    // 等待暂停恢复（手动暂停或 Take_over/Interact 自动暂停）
+                    while (_isPaused.value) {
+                        delay(200)
+                        ensureActive()
+                    }
                     step++
                     Log.d("AutoGLM_Debug", "Step: $step")
 
-                    // Update status
-                    ActionManager.updateStatus(getApplication<Application>().getString(R.string.status_thinking))
-
-                    // 1. Take Screenshot
-                    // Skip screenshot on first step if the request was initiated from our own app
-                    val screenshot = if (step == 1 && isAppInForeground) {
-                        Log.d("AutoGLM_Debug", "Step 1: Skipping screenshot (app in foreground)")
-                        null
-                    } else {
-                        Log.d("AutoGLM_Debug", "Taking screenshot for step $step...")
-                        if (DEBUG_MODE) {
-                            Bitmap.createBitmap(1080, 2400, Bitmap.Config.ARGB_8888)
-                        } else {
-                            // Use unified ActionManager for screenshot
-                            ActionManager.takeScreenshot()
+                    // 注入上次 Call_API 异步完成的总结：替换被总结部分，不阻塞子模型
+                    callApiSummaryChannel.tryReceive().getOrNull()?.let { payload ->
+                        val sep = payload.indexOf('|')
+                        if (sep > 0) {
+                            val sizeAtCallApi = payload.substring(0, sep).toIntOrNull() ?: 0
+                            val summary = payload.substring(sep + 1)
+                            synchronized(apiHistory) {
+                                if (sizeAtCallApi > 1 && apiHistory.size >= sizeAtCallApi) {
+                                    for (i in sizeAtCallApi - 1 downTo 1) {
+                                        apiHistory.removeAt(i)
+                                    }
+                                    apiHistory.add(1, Message("user", "【页面总结】$summary\n\n请根据总结继续执行下一步。"))
+                                    Log.d("AutoGLM_Debug", "Call_API: 已替换被总结部分并注入")
+                                }
+                            }
                         }
                     }
 
-                    // Check screenshot failure (only if we expected to take one)
-                    if (screenshot == null && !(step == 1 && isAppInForeground)) {
+                    ActionManager.updateStatus(getApplication<Application>().getString(R.string.status_thinking))
+
+                    // 1. Take Screenshot（截图前显示「进行界面截图」，等待 UI 渲染后再截图）
+                    val screenshotStatus = getApplication<Application>().getString(R.string.status_screenshot_taking)
+                    ActionManager.updateStatus(screenshotStatus)
+                    ActionManager.updateThinking(screenshotStatus)
+                    delay(80)   // 等待状态文字渲染后再截图，缩短隐藏前等待
+                    Log.d("AutoGLM_Debug", "Taking screenshot for step $step...")
+                    val screenshot = if (DEBUG_MODE) {
+                        Bitmap.createBitmap(1080, 2400, Bitmap.Config.ARGB_8888)
+                    } else {
+                        ActionManager.takeScreenshot()
+                    }
+
+                    if (screenshot == null) {
                         Log.e("AutoGLM_Debug", "Screenshot failed")
                         postError(getApplication<Application>().getString(R.string.error_screenshot_failed))
                         break
                     }
 
-                    // Log screenshot success
-                    if (screenshot != null) {
-                        Log.d("ChatViewModel", "Screenshot size: ${screenshot.width}x${screenshot.height}")
-                    }
-
-                    // 2. Get screen dimensions for ActionParser coordinate system
                     val screenWidth = if (DEBUG_MODE) 1080 else DisplayUtils.getScreenWidth(getApplication())
                     val screenHeight = if (DEBUG_MODE) 2400 else DisplayUtils.getScreenHeight(getApplication())
-                    Log.d("ChatViewModel", "Screen size: ${screenWidth}x${screenHeight}")
+                    val currentApp = if (DEBUG_MODE) "DebugApp" else (ActionManager.getCurrentApp().ifBlank { "Unknown" })
 
-                    // 3. Build User Message - 实时查询当前前台 app，避免轮询缓存导致的延迟
-                    val currentApp = try {
-                        val (ok, out) = ShizukuHelper.executeShellCommandWithOutput(
-                            "dumpsys window 2>/dev/null | grep -m1 'mFocusedApp'"
-                        )
-                        if (ok && out.isNotBlank()) {
-                            out.trim().substringAfter("u0 ", "").substringBefore("/").trim()
-                                .ifEmpty { ActionManager.getCurrentApp() }
-                        } else ActionManager.getCurrentApp()
-                    } catch (_: Exception) { ActionManager.getCurrentApp() }
+                    // 2. Build User Message: 图片 + 文本（子AI 直接看图）
                     val screenInfo = "{\"current_app\": \"$currentApp\"}"
-
-                    // Step 1 = master (intent analysis + task plan + first action)
-                    // 每 5 步或检测到卡住时主模型介入检查进度
-                    val isStuck = recentActionStrings.size >= 3 &&
-                            recentActionStrings.takeLast(3).distinct().size == 1
-                    val isMasterStep = (step == 1) || (subStepsCount >= maxSubSteps) || isStuck
-                    if (isMasterStep) {
-                        subStepsCount = 0
-                        if (isStuck) {
-                            recentActionStrings.clear()
-                            Log.w("AutoGLM_Debug", "Stuck detected! Same action repeated 3 times, master re-engaging")
-                        }
+                    val textPrompt = if (step == 1) {
+                        "$currentPrompt\n\n$screenInfo"
                     } else {
-                        subStepsCount++
-                    }
-                    val textPrompt = when {
-                        step == 1 -> {
-                            val inputLabel = if (isVoiceInput)
-                                getApplication<Application>().getString(R.string.voice_input_label)
-                            else
-                                getApplication<Application>().getString(R.string.text_input_label)
-                            "${getApplication<Application>().getString(R.string.master_intent_prompt)}\n\n$inputLabel：$currentPrompt\n\n$screenInfo"
-                        }
-                        isMasterStep -> {
-                            val stuckHint = if (isStuck) "\n\n⚠ 执行代理疑似卡住：连续重复相同动作，请分析原因并给出纠正指令。" else ""
-                            "${getApplication<Application>().getString(R.string.master_validation_prompt)}$stuckHint\n\n$screenInfo"
-                        }
-                        else -> "${getApplication<Application>().getString(R.string.sub_step_instruction)}\n\n** Screen Info **\n\n$screenInfo"
+                        "** Screen Info **\n\n$screenInfo"
                     }
 
                     val userContentItems = mutableListOf<ContentItem>()
-                    // 主模型不看截图，只接收纯文字（子任务返回）；子模型需要截图执行操作
-                    if (!isMasterStep && screenshot != null) {
-                        userContentItems.add(ContentItem("image_url", imageUrl = ImageUrl("data:image/jpeg;base64,${ModelClient.bitmapToBase64(screenshot)}")))
-                    }
+                    userContentItems.add(ContentItem("image_url", imageUrl = ImageUrl("data:image/jpeg;base64,${ModelClient.bitmapToBase64(screenshot)}")))
                     userContentItems.add(ContentItem("text", text = textPrompt))
+                    apiHistory.add(Message("user", userContentItems))
 
-                    val userMessage = Message("user", userContentItems)
-                    apiHistory.add(userMessage)
-
-                    // Get conversation ID for database operations
                     val conversationId = _uiState.value.activeConversationId
 
-                    // 3. Call API: Master 纯文本 / Sub 带截图
-                    val client = if (isMasterStep) (masterModelClient ?: subModelClient) else (subModelClient ?: masterModelClient)
-                    val historyForRequest = when {
-                        isMasterStep -> stripImagesFromHistory(apiHistory)
-                        else -> buildSubModelHistory(apiHistory, dateStr, memoryPrompt)
-                    }
-                    Log.d("AutoGLM_Debug", "Sending request to ${if (isMasterStep) "Master" else "Sub"} ModelClient (step=$step, textOnly=${isMasterStep})...")
-                    val responseText = client?.sendRequest(historyForRequest, if (isMasterStep) null else screenshot) ?: "Error: Client null"
-                    // Unescape escape sequences like \n, \t, etc.
+                    // 3. Call 子AI（带图）
+                    Log.d("AutoGLM_Debug", "Sending request to sub ModelClient (step=$step, with image)...")
+                    val responseText = client.sendRequest(apiHistory, screenshot)
                     val unescapedResponseText = unescapeResponse(responseText)
                     Log.d("AutoGLM_Debug", "Response received: $unescapedResponseText")
 
@@ -788,44 +803,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         break
                     }
 
-                    // Parse response parts for display
                     val (thinking, parsedAction) = ActionParser.parseResponsePartsToParsedAction(unescapedResponseText)
-
-                    // Extract raw action string for logging and storage
                     val actionStr = ActionParser.extractActionString(unescapedResponseText)
 
                     Log.i("AutoGLM_Log", "\n==================================================")
-                    Log.i("AutoGLM_Log", "💭 思考过程:")
-                    Log.i("AutoGLM_Log", thinking)
-                    Log.i("AutoGLM_Log", "🎯 执行动作:")
-                    Log.i("AutoGLM_Log", actionStr)
+                    Log.i("AutoGLM_Log", "Step $step | Think: $thinking")
+                    Log.i("AutoGLM_Log", "Step $step | Action: $actionStr")
                     Log.i("AutoGLM_Log", "==================================================")
 
-                    // 缓存 assistant 内容，避免重复调用 buildAssistantContent
                     val assistantContent = buildAssistantContent(thinking, actionStr)
-
-                    // Add Assistant response to history
                     apiHistory.add(Message("assistant", assistantContent))
 
-                    // 更新悬浮窗：有 action 时显示 DisplayActionCard 内容，否则显示思考过程
+                    // DisplayFormattedContent：同时显示思考文字和动作卡片
                     if (parsedAction != null) {
+                        ActionManager.updateThinking(thinking)
                         ActionManager.updateActionContent(parsedAction.toFormattedContent(getApplication()))
                     } else {
                         ActionManager.updateThinking(thinking)
                     }
 
-                    // Parse task plan from AI response
-                    val taskPlan = TaskPlanParser.parse(unescapedResponseText)
-                    if (taskPlan != null) {
-                        val stepLines = taskPlan.lines()
-                            .map { it.trim() }
-                            .filter { it.startsWith("- [") }
-                        currentTaskList = stepLines
-                        ActionManager.updateTaskList(stepLines)
-                        Log.d("AutoGLM_Debug", "Updated task plan from AI response")
-                    }
-                    
-                    // Save assistant message to database with screenshot
                     if (conversationId != null) {
                         try {
                             repository.saveAssistantMessage(conversationId, assistantContent, screenshot)
@@ -842,36 +838,65 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     )
 
-                    // If DEBUG_MODE, stop here after one round
                     if (DEBUG_MODE) {
-                        Log.d("AutoGLM_Debug", "DEBUG_MODE enabled, stopping after one round")
                         _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
                         break
                     }
 
-                    // 4. Parse Action from the extracted action string (not the full response)
+                    // 4. Parse Action（element 坐标格式，直接解析）
                     val action = ActionParser.parseAction(actionStr, screenWidth, screenHeight)
+                    ActionManager.updateStatus(getActionDescription(action))
 
-                    // Update Floating Window Status with friendly description
-                    val actionDesc = getActionDescription(action)
-                    ActionManager.updateStatus(actionDesc)
+                    // 4.5 Note / Call_API / Take_over / Interact：在 ChatViewModel 内处理
+                    when (action) {
+                        is Action.TakeOver, Action.Interact -> {
+                            // 需要人工干预：自动暂停，等待用户操作后点击继续
+                            pauseTask()
+                            continue@loop
+                        }
+                        is Action.Note -> {
+                            val copy = screenshot.copy(screenshot.config ?: Bitmap.Config.ARGB_8888, false)
+                            if (copy != null) {
+                                if (noteBuffer.size >= 5) noteBuffer.removeAt(0)
+                                noteBuffer.add(copy)
+                            }
+                            Log.d("AutoGLM_Debug", "Note: 已记录页面，缓冲区大小=${noteBuffer.size}")
+                            removeImagesFromHistory()
+                            delay(1000)
+                            continue@loop
+                        }
+                        is Action.CallApi -> {
+                            val masterClient = masterModelClient
+                            if (masterClient != null) {
+                                val instruction = action.instruction
+                                val historyText = buildHistoryText(apiHistory)
+                                val sizeAtCallApi = apiHistory.size
+                                viewModelScope.launch(Dispatchers.IO) {
+                                    val summary = processCallApiTextOnly(masterClient, instruction, historyText)
+                                    if (summary != null && !summary.startsWith("Error")) {
+                                        memoryManager.appendToDailyMemory("【Call_API】$summary")
+                                        callApiSummaryChannel.trySend("$sizeAtCallApi|$summary")
+                                        Log.d("AutoGLM_Debug", "Call_API: 异步总结完成，待下次请求替换注入")
+                                    }
+                                }
+                            }
+                            noteBuffer.clear()
+                            removeImagesFromHistory()
+                            delay(500)
+                            continue@loop
+                        }
+                        else -> { /* 继续执行常规 action */ }
+                    }
 
                     // 5. Execute Action
                     ensureActive()
                     val success = ActionManager.executeAction(action)
 
-                    // 记录动作用于卡住检测
-                    recentActionStrings.add(actionStr.trim())
-                    if (recentActionStrings.size > 5) recentActionStrings.removeAt(0)
-
                     if (action is Action.Finish) {
                         isFinished = true
                         _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
                         ActionManager.updateStatus(getApplication<Application>().getString(R.string.action_finish))
-
-                        // Mark task as completed in FloatingWindowController
                         ActionManager.markTaskCompleted()
-
                         updateTaskState(TaskEndState.COMPLETED, step)
                         break
                     }
@@ -882,22 +907,37 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                     removeImagesFromHistory()
 
-                    // delay() is cancellable - will respond to job cancellation
+                    // 主模型记忆管理：每 N 步摘要压缩历史，避免 token 爆炸
+                    val masterClient = masterModelClient
+                    if (masterClient != null && step % summarizeInterval == 0 && step > 0 && apiHistory.size > 4) {
+                        val summary = summarizeHistory(apiHistory)
+                        if (summary != null && !summary.startsWith("Error")) {
+                            val lastAssistant = apiHistory.lastOrNull { it.role == "assistant" }
+                            apiHistory.clear()
+                            val summarizedSystemContent = buildString {
+                                append(dateStr).append("\n").append(ModelClient.SYSTEM_PROMPT)
+                                if (sessionMemory.isNotBlank()) {
+                                    append("\n\n【本会话记忆】\n").append(sessionMemory)
+                                }
+                            }
+                            apiHistory.add(Message("system", summarizedSystemContent))
+                            apiHistory.add(Message("user", "【此前任务摘要】$summary\n\n请根据摘要继续执行下一步。"))
+                            if (lastAssistant != null) {
+                                apiHistory.add(lastAssistant)
+                            }
+                            Log.d("AutoGLM_Debug", "History summarized at step $step, context compressed")
+                        }
+                    }
+
                     delay(2000)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
-                // Task was cancelled by user - this is expected behavior
-                // DO NOT show as error - clear any error state
                 Log.d("ChatViewModel", "Task was cancelled by user")
                 _uiState.value = _uiState.value.copy(
                     isRunning = false,
                     isLoading = false,
-                    error = null  // Explicitly clear any error
+                    error = null
                 )
-                // Note: Do NOT call updateFloatingStatus() here as it creates a race condition
-                // where isTaskRunning stays true while status shows "stopped", preventing
-                // the window from hiding when app resumes. The window dismissal is handled
-                // by the FloatingWindowContent.kt stop button onClick handler.
                 updateTaskState(TaskEndState.USER_STOPPED, step)
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -916,62 +956,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (!DEBUG_MODE) {
                     if (step >= maxSteps) {
                         ActionManager.updateStatus(getApplication<Application>().getString(R.string.error_task_terminated_max_steps))
-                        // Mark task as completed in FloatingWindowController
                         ActionManager.markTaskCompleted()
-
                         updateTaskState(TaskEndState.MAX_STEPS_REACHED, step)
                     }
                 }
             }
         }
-    }
-
-    /**
-     * 子模型步骤开始前：将首个 [ ] 标记为 [/]，若已有 [/] 则不变
-     */
-    private fun markFirstPendingAsInProgress(list: List<String>): List<String> {
-        val result = list.toMutableList()
-        for (i in result.indices) {
-            val line = result[i].trim()
-            if (line.startsWith("- [ ]")) {
-                result[i] = line.replaceFirst("- [ ]", "- [/]")
-                return result
-            }
-            if (line.startsWith("- [/]")) return list  // 已有进行中，不变
-        }
-        return list
-    }
-
-    /**
-     * 子模型执行动作成功后：将当前步骤（[/] 或 [ ]）标记为 [x]，下一项 [ ] 标记为 [/]
-     */
-    private fun markCurrentTaskCompletedAndAdvance(list: List<String>): List<String> {
-        val result = list.toMutableList()
-        var currentIdx = -1
-        for (i in result.indices) {
-            val line = result[i].trim()
-            if (line.startsWith("- [/]") || line.startsWith("- [ ]")) {
-                currentIdx = i
-                break
-            }
-        }
-        if (currentIdx < 0) return list
-        // 当前项标记为完成
-        val currentLine = result[currentIdx]
-        result[currentIdx] = when {
-            currentLine.startsWith("- [/]") -> currentLine.replaceFirst("- [/]", "- [x]")
-            currentLine.startsWith("- [ ]") -> currentLine.replaceFirst("- [ ]", "- [x]")
-            else -> currentLine
-        }
-        // 下一项标记为进行中
-        for (i in (currentIdx + 1) until result.size) {
-            val line = result[i].trim()
-            if (line.startsWith("- [ ]")) {
-                result[i] = line.replaceFirst("- [ ]", "- [/]")
-                break
-            }
-        }
-        return result
     }
 
     /**
@@ -1002,111 +992,105 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     }
 
-    private fun removeImagesFromHistory() {
-        // Python logic: Remove images from the last user message to save context space
-        // The history is: [..., User(Image+Text), Assistant(Text)]
-        // So we look at the second to last item.
-        if (apiHistory.size < 2) return
+    /** 将 apiHistory 转为纯文本（不含图片） */
+    private fun buildHistoryText(history: List<Message>): String {
+        return buildString {
+            history.drop(1).forEach { msg ->
+                when (msg.role) {
+                    "user" -> {
+                        append("[用户] ")
+                        when (val c = msg.content) {
+                            is String -> append(c)
+                            is List<*> -> {
+                                c.filterIsInstance<ContentItem>()
+                                    .filter { it.type == "text" }
+                                    .joinTo(this) { it.text ?: "" }
+                            }
+                            else -> {}
+                        }
+                        append("\n")
+                    }
+                    "assistant" -> {
+                        append("[助手] ").append(msg.content.toString()).append("\n")
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
 
+    /** 移除 <think> 标签及其内容，避免任务内容混入模型内部标签 */
+    private fun stripThinkTags(text: String): String {
+        return text
+            .replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("</?think>[^<]*", RegexOption.IGNORE_CASE), "")
+            .trim()
+    }
+
+    /**
+     * 主模型审查任务：纠错字、整理任务描述、根据本机应用选择目标 App。
+     * 返回整理后的任务文本，失败时返回 null。
+     */
+    private suspend fun reviewTask(masterClient: ModelClient, rawTask: String, installedApps: String = ""): String? {
+        if (rawTask.isBlank()) return null
+        val appSection = if (installedApps.isNotBlank()) {
+            "\n\n本机已安装应用：\n$installedApps\n"
+        } else ""
+        val taskReviewPrompt = memoryManager.getTaskReviewPrompt()
+        val prompt = taskReviewPrompt + appSection + "\n用户任务：\n$rawTask"
+        val history = listOf(Message("user", prompt))
+        return masterClient.sendRequest(history, null)
+    }
+
+    /**
+     * Call_API：主模型仅根据文字内容总结（不传图，不阻塞）。
+     * 总结完成后通过 Channel 注入，子模型下次请求时可见。
+     */
+    private suspend fun processCallApiTextOnly(
+        masterClient: ModelClient,
+        instruction: String,
+        historyText: String
+    ): String? {
+        if (historyText.isBlank()) return null
+        val callApiPrompt = memoryManager.getCallApiPrompt()
+        val prompt = "$callApiPrompt\n\n指令：$instruction\n\n---\n对话记录：\n$historyText"
+        val history = listOf(Message("user", prompt))
+        return masterClient.sendRequest(history, null)
+    }
+
+    /**
+     * 主模型记忆管理：将 apiHistory 摘要压缩，返回摘要文本。
+     * 用于每 N 步后压缩上下文，避免 token 爆炸。
+     */
+    private suspend fun summarizeHistory(history: List<Message>): String? {
+        val masterClient = masterModelClient ?: return null
+        val historyText = buildHistoryText(history)
+        if (historyText.isBlank()) return null
+        val summarizePrompt = memoryManager.getSummarizePrompt()
+        val summarizeHistory = listOf(
+            Message("user", "$summarizePrompt\n\n$historyText")
+        )
+        return masterClient.sendRequest(summarizeHistory, null)
+    }
+
+    /**
+     * 从历史中移除上一条用户消息的图片，仅保留文本，以节省上下文空间。
+     */
+    private fun removeImagesFromHistory() {
+        if (apiHistory.size < 2) return
         val lastUserIndex = apiHistory.size - 2
         if (lastUserIndex < 0) return
-
         val lastUserMsg = apiHistory[lastUserIndex]
         if (lastUserMsg.role == "user" && lastUserMsg.content is List<*>) {
             try {
                 @Suppress("UNCHECKED_CAST")
                 val contentList = lastUserMsg.content as List<*>
-
-                // Filter items keeping only text
                 val textOnlyList = contentList.filter { item ->
-                    (item as? com.sidhu.androidautoglm.network.ContentItem)?.type == "text"
+                    (item as? ContentItem)?.type == "text"
                 }
-
-                // Replace the message in history with the text-only version
                 apiHistory[lastUserIndex] = lastUserMsg.copy(content = textOnlyList)
-                // Log.d("ChatViewModel", "Removed image from history at index $lastUserIndex")
             } catch (e: Exception) {
                 Log.e("ChatViewModel", "Failed to remove image from history", e)
-            }
-        }
-    }
-
-    /** 主模型纯文本：从 history 中移除所有图片，只保留文字（子任务返回内容） */
-    private fun stripImagesFromHistory(history: List<Message>): List<Message> {
-        return history.map { msg ->
-            if (msg.role != "user" || msg.content !is List<*>) return@map msg
-            @Suppress("UNCHECKED_CAST")
-            val contentList = msg.content as List<ContentItem>
-            val textOnly = contentList.filter { it.type == "text" }
-            if (textOnly.size == contentList.size) msg
-            else Message(msg.role, if (textOnly.size == 1) textOnly.first().text ?: "" else textOnly)
-        }
-    }
-
-    /** 子模型专用：不含任务清单，只关注当前步骤。系统提示不含任务计划指令和任务进度，assistant 消息中移除 task_plan 块 */
-    private fun buildSubModelHistory(history: List<Message>, dateStr: String, memoryPrompt: String): List<Message> {
-        val subSystemPrompt = buildString {
-            append(dateStr).append("\n\n")
-            append(memoryPrompt)
-        }
-        val taskPlanBlockRegex = Regex("<task_plan>[\\s\\S]*?</task_plan>", RegexOption.IGNORE_CASE)
-        val taskPlanTagRegex = Regex("</?task_plan>", RegexOption.IGNORE_CASE)
-
-        // ── 借鉴 openclaw limitHistoryTurns ────────────────────────────────────
-        // 子模型历史最多保留最近 MAX_SUB_HISTORY_TURNS 轮（user+assistant 各算1条）
-        // 但始终保留：
-        //   [0] system prompt
-        //   [1] 主模型规划的 user 消息（step 1 的用户消息）
-        //   [2] 主模型规划的 assistant 回复（含 task_plan，供子模型参考）
-        // 其余只保留最近 N 轮，防止长任务超出 token limit
-        val anchorCount = 3  // system + master user msg + master assistant msg（含 task_plan）
-        val maxRecentTurns = 6  // 保留最近 6 个 user+assistant 对（12 条消息）
-
-        val limited: List<Message> = if (history.size <= anchorCount + maxRecentTurns * 2) {
-            history
-        } else {
-            val anchor = history.take(anchorCount)
-            val tail = history.drop(anchorCount)
-            // 从尾部倒数，统计 user 消息轮数，保留最近 maxRecentTurns 轮
-            var userCount = 0
-            var cutIndex = tail.size
-            for (i in tail.indices.reversed()) {
-                if (tail[i].role == "user") {
-                    userCount++
-                    if (userCount > maxRecentTurns) {
-                        cutIndex = i + 1
-                        break
-                    }
-                }
-            }
-            val kept = tail.drop(cutIndex)
-            val truncatedCount = tail.size - kept.size
-            Log.d("ChatViewModel", "Sub history truncated: dropped $truncatedCount old messages, keeping $anchorCount anchor + ${kept.size} recent")
-            // 在截断边界插入一条提示，告知模型历史已被裁剪
-            val truncationHint = Message("user", "[历史已截断，请根据任务计划和最近操作继续执行。]")
-            anchor + listOf(truncationHint) + kept
-        }
-
-        // 子模型需要看到主模型第一次回复中的任务计划（<task_plan>），以便自主完成后续步骤
-        // 因此：第一条 assistant 消息（主模型的规划回复）保留 task_plan，其余 assistant 消息移除
-        var firstAssistantSeen = false
-
-        return limited.mapIndexed { index, msg ->
-            when {
-                index == 0 && msg.role == "system" -> Message("system", subSystemPrompt)
-                msg.role == "assistant" && msg.content is String -> {
-                    if (!firstAssistantSeen) {
-                        firstAssistantSeen = true
-                        msg  // 保留主模型初始任务计划，不剥离 task_plan
-                    } else {
-                        val stripped = taskPlanBlockRegex.replace(msg.content as String, "")
-                            .let { taskPlanTagRegex.replace(it, "") }
-                            .replace(Regex("\\n{3,}"), "\n\n")
-                            .trim()
-                        Message(msg.role, stripped)
-                    }
-                }
-                else -> msg
             }
         }
     }

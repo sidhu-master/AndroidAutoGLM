@@ -82,7 +82,7 @@ class FloatingWindowManager(private val context: Context) {
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.START
             x = 0
-            y = 20
+            y = 0  // 贴底，无底部 margin
         }
     }
 

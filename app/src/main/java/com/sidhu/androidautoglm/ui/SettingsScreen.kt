@@ -6,8 +6,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.OpenInNew
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.material3.Switch
 import androidx.compose.runtime.*
@@ -24,14 +22,20 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.clickable
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.rememberCoroutineScope
+import com.sidhu.androidautoglm.BuildConfig
+import com.sidhu.androidautoglm.utils.ShizukuHelper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.Color
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import android.widget.Toast
 import com.sidhu.androidautoglm.network.UpdateInfo
-import com.sidhu.androidautoglm.BuildConfig
 import com.sidhu.androidautoglm.R
 
 // Updated by AI: Settings Screen with i18n support
@@ -55,8 +59,6 @@ fun SettingsScreen(
     onWakeWordToggle: (Boolean) -> Unit,
     wakeWord: String,
     onWakeWordChange: (String) -> Unit,
-    isShizukuModeEnabled: Boolean,
-    onShizukuModeToggle: (Boolean) -> Unit,
     // 主/子模型配置
     masterApiKey: String = "",
     masterBaseUrl: String = "https://api.minimaxi.com/v1",
@@ -88,8 +90,6 @@ fun SettingsScreen(
     
     val keyboardController = LocalSoftwareKeyboardController.current
     
-    // Visibility toggle only for the input field in Edit Mode
-    var isInputVisible by remember { mutableStateOf(false) }
 
     // Update Logic
     val context = LocalContext.current
@@ -192,39 +192,6 @@ fun SettingsScreen(
                     }
                 }
 
-                // Shizuku Mode Card
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = stringResource(R.string.shizuku_mode_title),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    text = stringResource(R.string.shizuku_mode_desc),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = isShizukuModeEnabled,
-                                onCheckedChange = onShizukuModeToggle
-                            )
-                        }
-                    }
-                }
-
                 // Battery Optimization Card
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -302,6 +269,71 @@ fun SettingsScreen(
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
+                        }
+                    }
+                }
+
+                // 内置输入法 Card
+                val scope = rememberCoroutineScope()
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+                                },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.ime_enable_title),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = stringResource(R.string.ime_enable_desc),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Filled.OpenInNew,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = {
+                                if (!ShizukuHelper.isShizukuAvailable() || !ShizukuHelper.checkPermission(context)) {
+                                    Toast.makeText(context, R.string.ime_enable_fail_shizuku, Toast.LENGTH_LONG).show()
+                                    return@Button
+                                }
+                                scope.launch {
+                                    val imeId = "${BuildConfig.APPLICATION_ID}/com.sidhu.androidautoglm.input.AdbIME"
+                                    val ok = withContext(Dispatchers.IO) {
+                                        ShizukuHelper.executeShellCommand("ime enable $imeId")
+                                    }
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(
+                                            context,
+                                            if (ok) R.string.ime_enable_success else R.string.ime_enable_fail_shizuku,
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                        if (ok) {
+                                            context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+                                        }
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.ime_enable_btn))
                         }
                     }
                 }
@@ -440,15 +472,7 @@ fun SettingsScreen(
                             onValueChange = { newMasterKey = it },
                             label = { Text(stringResource(R.string.enter_api_key)) },
                             modifier = Modifier.fillMaxWidth(),
-                            visualTransformation = if (isInputVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                            trailingIcon = {
-                                IconButton(onClick = { isInputVisible = !isInputVisible }) {
-                                    Icon(
-                                        imageVector = if (isInputVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                        contentDescription = if (isInputVisible) stringResource(R.string.hide_api_key) else stringResource(R.string.show_api_key)
-                                    )
-                                }
-                            },
+                            visualTransformation = PasswordVisualTransformation(),
                             placeholder = { Text(stringResource(R.string.api_key_placeholder)) }
                         )
 
@@ -553,7 +577,7 @@ fun SettingsScreen(
                                 onValueChange = { newSubKey = it },
                                 label = { Text(stringResource(R.string.enter_api_key)) },
                                 modifier = Modifier.fillMaxWidth(),
-                                visualTransformation = if (isInputVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                                visualTransformation = PasswordVisualTransformation(),
                                 placeholder = { Text(stringResource(R.string.api_key_placeholder)) }
                             )
                         }
@@ -664,8 +688,6 @@ fun SettingsScreenPreview() {
         onWakeWordToggle = {},
         wakeWord = "皮皮虾",
         onWakeWordChange = {},
-        isShizukuModeEnabled = false,
-        onShizukuModeToggle = {},
         masterApiKey = "",
         masterBaseUrl = "https://api.minimaxi.com/v1",
         masterIsGemini = false,

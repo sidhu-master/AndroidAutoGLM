@@ -59,6 +59,8 @@ android {
     namespace = "com.sidhu.androidautoglm"
     compileSdk = 34
 
+    ndkVersion = "26.1.10909125"
+
     defaultConfig {
         applicationId = "com.sidhu.androidautoglm"
         minSdk = 24
@@ -73,6 +75,10 @@ android {
         
         buildConfigField("String", "DEFAULT_API_KEY", "\"$defaultApiKey\"")
         buildConfigField("String", "MINIMAX_API_KEY", "\"$minimaxApiKey\"")
+
+        ndk {
+            abiFilters += setOf("arm64-v8a")
+        }
     }
 
     buildTypes {

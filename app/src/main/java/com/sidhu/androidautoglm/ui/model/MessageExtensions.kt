@@ -133,9 +133,13 @@ fun ParsedAction.buildDetails(): Map<String, String>? {
             val app = this.getParam("app")
             if (app != null) mapOf("app" to app) else null
         }
-        ActionType.FINISH -> {
+        ActionType.FINISH, ActionType.TAKE_OVER -> {
             val message = this.getParam("message")
             if (message != null && message.isNotEmpty()) mapOf("message" to message) else null
+        }
+        ActionType.CALL_API -> {
+            val instruction = this.getParam("instruction")
+            if (instruction != null && instruction.isNotEmpty()) mapOf("instruction" to instruction) else null
         }
         else -> null
     }

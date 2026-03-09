@@ -24,14 +24,13 @@ import java.util.concurrent.CountDownLatch
  * 封装了所有 UI 操作（返回主页、截图、悬浮窗、执行动作等）
  * 自动根据配置选择使用无障碍服务或 Shizuku
  *
- * 使用方式：ActionManager.init(context, shizukuModeEnabled) 初始化，然后调用各种方法
+ * 使用方式：ActionManager.init(context) 初始化，然后调用各种方法
  */
 object ActionManager {
 
     private const val TAG = "ActionManager"
 
     private lateinit var context: Context
-    private var shizukuModeEnabled: Boolean = false
     private var floatingWindowController: FloatingWindowController? = null
 
     // Action executor
@@ -41,10 +40,9 @@ object ActionManager {
      * 初始化 ActionManager
      * 应在 Application 或 Activity 中调用
      */
-    fun init(context: Context, shizukuModeEnabled: Boolean = false) {
+    fun init(context: Context) {
         this.context = context.applicationContext
-        this.shizukuModeEnabled = shizukuModeEnabled
-        Log.d(TAG, "ActionManager initialized, shizuku mode: $shizukuModeEnabled")
+        Log.d(TAG, "ActionManager initialized")
     }
 
     /**
@@ -55,17 +53,10 @@ object ActionManager {
     }
 
     /**
-     * 更新 Shizuku 模式设置
+     * 检查是否可以使用 Shizuku
      */
-    fun setShizukuModeEnabled(enabled: Boolean) {
-        this.shizukuModeEnabled = enabled
-    }
-
-    /**
-     * 检查是否可以使用 Shizuku 模式
-     */
-    fun canUseShizuku(): Boolean {
-        return shizukuModeEnabled && ShizukuHelper.isShizukuAvailable() && ShizukuHelper.checkPermission(context)
+    private fun canUseShizuku(): Boolean {
+        return ShizukuHelper.isShizukuAvailable() && ShizukuHelper.checkPermission(context)
     }
 
     /**
@@ -118,8 +109,9 @@ object ActionManager {
 
     /**
      * 显示悬浮窗（仅使用一个控制器：service 存在时用 service 的，否则用本地的）
+     * @param onPauseResume 暂停/继续按钮点击回调（null 时不显示该按钮）
      */
-    fun showFloatingWindow(onStop: () -> Unit, isRunning: Boolean = true) {
+    fun showFloatingWindow(onStop: () -> Unit, isRunning: Boolean = true, onPauseResume: (() -> Unit)? = null) {
         if (!hasOverlayPermission()) {
             Log.w(TAG, "showFloatingWindow: no overlay permission")
             return
@@ -132,7 +124,7 @@ object ActionManager {
                 Handler(Looper.getMainLooper()).postDelayed({
                     (service.floatingWindowController ?: getEffectiveFloatingWindowController())?.let {
                         CoroutineScope(Dispatchers.Main).launch {
-                            it.showAndWaitForLayout(onStop = onStop, isRunning = isRunning)
+                            it.showAndWaitForLayout(onStop = onStop, isRunning = isRunning, onPauseResume = onPauseResume)
                         }
                     }
                 }, 150)
@@ -146,14 +138,19 @@ object ActionManager {
                 }
                 latch.await()
                 CoroutineScope(Dispatchers.Main).launch {
-                    c?.showAndWaitForLayout(onStop = onStop, isRunning = isRunning)
+                    c?.showAndWaitForLayout(onStop = onStop, isRunning = isRunning, onPauseResume = onPauseResume)
                 }
             }
         } else {
             CoroutineScope(Dispatchers.Main).launch {
-                controller.showAndWaitForLayout(onStop = onStop, isRunning = isRunning)
+                controller.showAndWaitForLayout(onStop = onStop, isRunning = isRunning, onPauseResume = onPauseResume)
             }
         }
+    }
+
+    /** 设置悬浮窗暂停状态（用于更新暂停/继续按钮显示） */
+    fun setPaused(paused: Boolean) {
+        getEffectiveFloatingWindowController()?.setPaused(paused)
     }
 
     /**
@@ -240,11 +237,9 @@ object ActionManager {
         return getService()?.currentApp?.value?.takeIf { !it.isNullOrBlank() } ?: ""
     }
 
-    /** 截图（会先隐藏悬浮窗避免被截入） */
+    /** 截图（由 service 在真正截屏时隐藏悬浮窗，准备阶段不隐藏） */
     suspend fun takeScreenshot(): Bitmap? {
-        return getEffectiveFloatingWindowController()?.useWindowSuspension {
-            ScreenshotHelper.takeScreenshot(getService())
-        } ?: ScreenshotHelper.takeScreenshot(getService())
+        return ScreenshotHelper.takeScreenshot(getService())
     }
 
     /** 执行动作（Tap/Swipe/LongPress 隐藏悬浮窗，但仅在手势发出后立即恢复，不把 delay(1000) 包在隐藏范围内） */

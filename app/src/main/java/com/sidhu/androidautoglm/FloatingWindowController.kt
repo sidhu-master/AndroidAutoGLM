@@ -68,6 +68,8 @@ sealed class FloatingWindowState {
         val statusText: String,
         val isTaskRunning: Boolean = true,
         val onStopCallback: (() -> Unit)? = null,
+        val isPaused: Boolean = false,
+        val onPauseResumeCallback: (() -> Unit)? = null,
         val taskList: List<String> = emptyList(),
         val thinkingLines: List<String> = emptyList(),
         val actionContent: com.sidhu.androidautoglm.ui.model.FormattedContent.ActionContent? = null
@@ -89,6 +91,8 @@ sealed class FloatingWindowState {
         val cachedStatusText: String,
         val cachedIsTaskRunning: Boolean,
         val cachedOnStopCallback: (() -> Unit)?,
+        val cachedIsPaused: Boolean = false,
+        val cachedOnPauseResumeCallback: (() -> Unit)? = null,
         val cachedTaskList: List<String> = emptyList(),
         val cachedThinkingLines: List<String> = emptyList(),
         val cachedActionContent: com.sidhu.androidautoglm.ui.model.FormattedContent.ActionContent? = null
@@ -269,14 +273,22 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                 is FloatingWindowState.Hidden,
                 is FloatingWindowState.TaskCompleted -> null
             }
+            val preservedOnPauseResumeCallback = when (val s = _stateFlow.value) {
+                is FloatingWindowState.Visible -> s.onPauseResumeCallback
+                is FloatingWindowState.TemporarilyHidden -> s.cachedOnPauseResumeCallback
+                is FloatingWindowState.RecordingOverlayShown -> s.underlyingState.onPauseResumeCallback
+                is FloatingWindowState.ReviewOverlayShown -> s.underlyingState.onPauseResumeCallback
+                is FloatingWindowState.Hidden,
+                is FloatingWindowState.TaskCompleted -> null
+            }
 
             // Handle TaskCompleted state by first transitioning to Hidden
             if (_stateFlow.value is FloatingWindowState.TaskCompleted) {
                 setState(FloatingWindowState.Hidden)
             }
 
-            // Now transition to Visible state with task running
-            setState(FloatingWindowState.Visible(defaultStatus, true, preservedOnStopCallback))
+            // Now transition to Visible state with task running (isPaused=false for new task)
+            setState(FloatingWindowState.Visible(defaultStatus, true, preservedOnStopCallback, false, preservedOnPauseResumeCallback))
         }
     }
 
@@ -581,8 +593,9 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
      *
      * @param onStop Callback when stop button is clicked
      * @param isRunning Whether the task is currently running (affects UI display)
+     * @param onPauseResume Callback when pause/resume button is clicked (null to hide the button)
      */
-    suspend fun showAndWaitForLayout(onStop: () -> Unit, isRunning: Boolean = true) {
+    suspend fun showAndWaitForLayout(onStop: () -> Unit, isRunning: Boolean = true, onPauseResume: (() -> Unit)? = null) {
         val currentState = _stateFlow.value
 
         if (currentState is FloatingWindowState.Visible) {
@@ -590,6 +603,7 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
             updateVisibleState(
                 isTaskRunning = isRunning,
                 onStopCallback = onStop,
+                onPauseResumeCallback = onPauseResume,
                 reason = "showAndWait"
             )
             // Already visible, no need to wait for layout
@@ -599,7 +613,7 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
         // Transition to Visible state and wait for layout
         val defaultStatus = context.getString(R.string.fw_ready)
         val layoutComplete = CompletableDeferred<Unit>()
-        setState(FloatingWindowState.Visible(defaultStatus, isRunning, onStop)) {
+        setState(FloatingWindowState.Visible(defaultStatus, isRunning, onStop, false, onPauseResume)) {
             layoutComplete.complete(Unit)
         }
         layoutComplete.await()
@@ -620,6 +634,8 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
         statusText: String? = null,
         isTaskRunning: Boolean? = null,
         onStopCallback: (() -> Unit)? = null,
+        isPaused: Boolean? = null,
+        onPauseResumeCallback: (() -> Unit)? = null,
         taskList: List<String>? = null,
         thinkingLines: List<String>? = null,
         actionContent: com.sidhu.androidautoglm.ui.model.FormattedContent.ActionContent? = null,
@@ -632,25 +648,36 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
         val newStatusText = statusText ?: (oldVisible?.statusText ?: "")
         val newIsTaskRunning = isTaskRunning ?: (oldVisible?.isTaskRunning ?: true)
         val newCallback = onStopCallback ?: oldVisible?.onStopCallback
+        val newIsPaused = isPaused ?: (oldVisible?.isPaused ?: false)
+        val newPauseResumeCallback = onPauseResumeCallback ?: oldVisible?.onPauseResumeCallback
         val newTaskList = taskList ?: (oldVisible?.taskList ?: emptyList())
         val newThinkingLines = thinkingLines ?: (oldVisible?.thinkingLines ?: emptyList())
         val newActionContent = when {
             actionContent != null -> actionContent
-            thinkingLines != null -> null  // updateThinking 时清空 actionContent，以显示 thinking
+            // 更新 thinking 时保留 actionContent，以支持 DisplayFormattedContent 同时显示文字和动作卡片
             else -> oldVisible?.actionContent
         }
 
-        Log.d("FloatingWindow", "updateVisibleState [$reason]: status=\"$newStatusText\", taskList=${newTaskList.size}, actionContent=${newActionContent != null}")
+        Log.d("FloatingWindow", "updateVisibleState [$reason]: status=\"$newStatusText\", taskList=${newTaskList.size}, actionContent=${newActionContent != null}, isPaused=$newIsPaused")
 
         val newState = FloatingWindowState.Visible(
             statusText = newStatusText,
             isTaskRunning = newIsTaskRunning,
             onStopCallback = newCallback,
+            isPaused = newIsPaused,
+            onPauseResumeCallback = newPauseResumeCallback,
             taskList = newTaskList,
             thinkingLines = newThinkingLines,
             actionContent = newActionContent
         )
         setState(newState)
+    }
+
+    /** 设置暂停状态（由 ActionManager 转发，用于悬浮窗按钮显示） */
+    fun setPaused(paused: Boolean) {
+        controllerScope.launch {
+            updateVisibleState(isPaused = paused, reason = "setPaused")
+        }
     }
 
     fun updateStatus(status: String) {
@@ -716,6 +743,8 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                         cachedStatusText = currentState.statusText,
                         cachedIsTaskRunning = currentState.isTaskRunning,
                         cachedOnStopCallback = currentState.onStopCallback,
+                        cachedIsPaused = currentState.isPaused,
+                        cachedOnPauseResumeCallback = currentState.onPauseResumeCallback,
                         cachedTaskList = currentState.taskList,
                         cachedThinkingLines = currentState.thinkingLines,
                         cachedActionContent = currentState.actionContent
@@ -728,6 +757,8 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                         statusText = currentState.cachedStatusText,
                         isTaskRunning = currentState.cachedIsTaskRunning,
                         onStopCallback = currentState.cachedOnStopCallback,
+                        isPaused = currentState.cachedIsPaused,
+                        onPauseResumeCallback = currentState.cachedOnPauseResumeCallback,
                         taskList = currentState.cachedTaskList,
                         thinkingLines = currentState.cachedThinkingLines,
                         actionContent = currentState.cachedActionContent
@@ -761,10 +792,10 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
             Log.d("FloatingWindow", "useWindowSuspension: window hidden, didActuallySuspend=$didActuallySuspend, 请求耗时=${tAfterSuspend - tRequest}ms")
             controllerScope.launch {
                 try {
-                    // 仅首次 suspend 时等待触摸目标更新；嵌套调用（已 hidden）则跳过
+                    // 仅首次 suspend 时等待窗口完全移除；嵌套调用（已 hidden）则跳过
                     if (didActuallySuspend) {
-                        delay(80)
-                        Log.d("FloatingWindow", "useWindowSuspension: delay(80) done")
+                        delay(30)  // 1 frame(~16ms) + 少量缓冲，缩短悬浮窗隐藏时长
+                        Log.d("FloatingWindow", "useWindowSuspension: delay(30) done")
                     }
                     operationStartTimeMs = System.currentTimeMillis()
                     val opResult = withContext(Dispatchers.Default) { operation() }

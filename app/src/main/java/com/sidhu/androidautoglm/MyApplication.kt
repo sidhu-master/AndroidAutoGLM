@@ -3,6 +3,7 @@ package com.sidhu.androidautoglm
 import android.app.Application
 import com.sidhu.androidautoglm.action.AppMapper
 import com.sidhu.androidautoglm.action.AppMatcher
+import com.sidhu.androidautoglm.memory.MemoryManager
 import com.sidhu.androidautoglm.utils.SherpaModelManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,7 @@ class MyApplication : Application() {
         super.onCreate()
         AppMapper.init(this)
         AppMatcher.init(AppMapper)
+        MemoryManager(this).init()
         // 预加载语音模型（若已启用唤醒词），减少唤醒后等待时间
         val prefs = getSharedPreferences("app_settings", MODE_PRIVATE)
         if (prefs.getBoolean("wake_up_enabled", false)) {

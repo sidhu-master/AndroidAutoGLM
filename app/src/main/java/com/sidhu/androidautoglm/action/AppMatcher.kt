@@ -12,22 +12,120 @@ import android.util.Log
 object AppMatcher {
 
     /**
-     * Known app aliases for common Chinese apps.
-     * Used as fallback when launcher query doesn't return the app (e.g. OEM restrictions).
+     * 静态应用映射（借鉴 Open-AutoGLM apps.py），当 Launcher 查询不到时作为 fallback。
+     * 覆盖常见中文应用及部分国际应用。
      */
     private val knownAliases = mapOf(
+        // 社交通讯
+        "微信" to "com.tencent.mm",
+        "WeChat" to "com.tencent.mm",
+        "wechat" to "com.tencent.mm",
+        "QQ" to "com.tencent.mobileqq",
+        "微博" to "com.sina.weibo",
+        // 电商购物
+        "淘宝" to "com.taobao.taobao",
+        "淘宝闪购" to "com.taobao.taobao",
+        "京东" to "com.jingdong.app.mall",
+        "京东秒送" to "com.jingdong.app.mall",
+        "拼多多" to "com.xunmeng.pinduoduo",
+        "唯品会" to "com.vancl.mobile",
+        "得物" to "com.shizhuang.duapp",
+        "闲鱼" to "com.taobao.idlefish",
+        "Temu" to "com.einnovation.temu",
+        "temu" to "com.einnovation.temu",
+        // 生活社区
+        "小红书" to "com.xingin.xhs",
+        "豆瓣" to "com.douban.frodo",
+        "知乎" to "com.zhihu.android",
+        // 地图导航
+        "高德地图" to "com.autonavi.minimap",
+        "百度地图" to "com.baidu.BaiduMap",
+        "Google Maps" to "com.google.android.apps.maps",
+        "google maps" to "com.google.android.apps.maps",
+        "GoogleMaps" to "com.google.android.apps.maps",
+        // 美食外卖
+        "美团" to "com.sankuai.meituan",
+        "大众点评" to "com.dianping.v1",
+        "饿了么" to "me.ele",
+        "肯德基" to "com.yek.android.kfc.activitys",
+        "麦当劳" to "com.mcdonalds.app",
+        "McDonald" to "com.mcdonalds.app",
+        "mcdonald" to "com.mcdonalds.app",
+        // 出行旅游
+        "携程" to "ctrip.android.view",
+        "铁路12306" to "com.MobileTicket",
+        "12306" to "com.MobileTicket",
+        "去哪儿" to "com.Qunar",
+        "去哪儿旅行" to "com.Qunar",
+        "滴滴出行" to "com.sdu.didi.psnger",
+        // 视频娱乐
+        "bilibili" to "tv.danmaku.bili",
+        "B站" to "tv.danmaku.bili",
         "抖音" to "com.ss.android.ugc.aweme",
         "抖音短视频" to "com.ss.android.ugc.aweme",
         "抖音极速版" to "com.ss.android.ugc.aweme.lite",
-        "微信" to "com.tencent.mm",
-        "QQ" to "com.tencent.mobileqq",
-        "淘宝" to "com.taobao.taobao",
+        "快手" to "com.smile.gifmaker",
+        "腾讯视频" to "com.tencent.qqlive",
+        "爱奇艺" to "com.qiyi.video",
+        "优酷视频" to "com.youku.phone",
+        "芒果TV" to "com.hunantv.imgo.activity",
+        "TikTok" to "com.zhiliaoapp.musically",
+        "tiktok" to "com.zhiliaoapp.musically",
+        "Tiktok" to "com.zhiliaoapp.musically",
+        // 音乐音频
+        "网易云音乐" to "com.netease.cloudmusic",
+        "QQ音乐" to "com.tencent.qqmusic",
+        "汽水音乐" to "com.luna.music",
+        "喜马拉雅" to "com.ximalaya.ting.android",
+        // 阅读
+        "番茄小说" to "com.dragon.read",
+        "番茄免费小说" to "com.dragon.read",
+        "七猫免费小说" to "com.kmxs.reader",
+        // 效率工具
+        "飞书" to "com.ss.android.lark",
+        "QQ邮箱" to "com.tencent.androidqqmail",
+        "Gmail" to "com.google.android.gm",
+        "gmail" to "com.google.android.gm",
+        "Chrome" to "com.android.chrome",
+        "chrome" to "com.android.chrome",
+        "Google Chrome" to "com.android.chrome",
+        "WPS" to "cn.wps.moffice_eng",
+        // AI 与工具
+        "豆包" to "com.larus.nova",
+        // 健康运动
+        "keep" to "com.gotokeep.keep",
+        "Keep" to "com.gotokeep.keep",
+        "美柚" to "com.lingan.seeyou",
+        // 新闻资讯
+        "腾讯新闻" to "com.tencent.news",
+        "今日头条" to "com.ss.android.article.news",
+        // 房产
+        "贝壳找房" to "com.lianjia.beike",
+        "安居客" to "com.anjuke.android.app",
+        // 金融
+        "同花顺" to "com.hexin.plat.android",
         "支付宝" to "com.eg.android.AlipayGphone",
-        "美团" to "com.sankuai.meituan",
-        "京东" to "com.jingdong.app.mall",
-        "拼多多" to "com.xunmeng.pinduoduo",
+        // 游戏
+        "星穹铁道" to "com.miHoYo.hkrpg",
+        "崩坏：星穹铁道" to "com.miHoYo.hkrpg",
+        "恋与深空" to "com.papegames.lysk.cn",
+        // 系统与通用
+        "设置" to "com.android.settings",
+        "Settings" to "com.android.settings",
+        "Android System Settings" to "com.android.settings",
+        "AndroidSystemSettings" to "com.android.settings",
         "百度" to "com.baidu.searchbox",
-        "高德地图" to "com.autonavi.minimap"
+        "Telegram" to "org.telegram.messenger",
+        "WhatsApp" to "com.whatsapp",
+        "Whatsapp" to "com.whatsapp",
+        "Twitter" to "com.twitter.android",
+        "twitter" to "com.twitter.android",
+        "X" to "com.twitter.android",
+        "Reddit" to "com.reddit.frontpage",
+        "reddit" to "com.reddit.frontpage",
+        "Duolingo" to "com.duolingo",
+        "duolingo" to "com.duolingo",
+        "VLC" to "org.videolan.vlc"
     )
 
     /**
@@ -74,13 +172,6 @@ object AppMatcher {
         if (source == null) {
             Log.w("AppMatcher", "dataSource is null")
             return null
-        }
-
-        // For "抖音": prefer TikTok from launcher if installed
-        if (normalized == "抖音" || normalized.contains("抖音")) {
-            source.map.entries.find { it.key.equals("TikTok", ignoreCase = true) }?.let { return it.value }
-            (source as? AppMapper)?.refreshLauncherApps()
-            source.map.entries.find { it.key.equals("TikTok", ignoreCase = true) }?.let { return it.value }
         }
 
         // Check launcher/datasource first

@@ -26,7 +26,6 @@ import com.sidhu.androidautoglm.ui.ConversationListViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sidhu.androidautoglm.network.UpdateInfo
 import com.sidhu.androidautoglm.utils.UpdateManager
-import com.sidhu.androidautoglm.utils.ShizukuHelper
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -116,14 +115,7 @@ class MainActivity : ComponentActivity() {
         isWakeWordEnabledState.value = prefs.getBoolean("wake_up_enabled", false)
         var isWakeWordEnabled by isWakeWordEnabledState
         var wakeWord by mutableStateOf(prefs.getString("wake_word", "皮皮虾") ?: "皮皮虾")
-        // 读取Shizuku模式设置
-        var isShizukuModeEnabled by mutableStateOf(prefs.getBoolean("shizuku_mode_enabled", false))
-
-        // 如果 Shizuku 模式已启用，启动服务
-        if (isShizukuModeEnabled) {
-            Log.d("MainActivity", "Shizuku mode enabled on startup, starting service")
-            AutoGLMShizukuService.startService(this)
-        }
+        AutoGLMShizukuService.startService(this)
 
         val locale = if (savedLang == "zh") Locale.CHINESE else Locale.ENGLISH
         val config = resources.configuration
@@ -317,49 +309,6 @@ class MainActivity : ComponentActivity() {
                                     com.sidhu.androidautoglm.utils.WakeWordDetector.updateWakeWord(newWord)
                                     if (isWakeWordEnabled) {
                                         shizukuService?.startWakeWordListening()
-                                    }
-                                },
-                                // Shizuku模式参数
-                                isShizukuModeEnabled = isShizukuModeEnabled,
-                                onShizukuModeToggle = { enabled ->
-                                    isShizukuModeEnabled = enabled
-                                    prefs.edit().putBoolean("shizuku_mode_enabled", enabled).apply()
-
-                                    if (enabled) {
-                                        when {
-                                            !ShizukuHelper.isShizukuAvailable() -> {
-                                                // Shizuku 未安装或未运行，打开 Shizuku 应用
-                                                try {
-                                                    val intent = packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
-                                                    if (intent != null) {
-                                                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                        startActivity(intent)
-                                                        android.widget.Toast.makeText(this@MainActivity, R.string.shizuku_open_app_toast, android.widget.Toast.LENGTH_LONG).show()
-                                                    } else {
-                                                        val uri = Uri.parse("https://play.google.com/store/apps/details?id=moe.shizuku.privileged.api")
-                                                        startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                                                    }
-                                                } catch (_: Exception) {}
-                                            }
-                                            ShizukuHelper.checkPermission(this@MainActivity) -> {
-                                                // 已有授权，直接启动服务
-                                                Log.d("MainActivity", "Shizuku permission OK, starting service")
-                                                AutoGLMShizukuService.startService(this@MainActivity)
-                                                viewModel.checkShizukuConnection(this@MainActivity)
-                                            }
-                                            else -> {
-                                                // 需要请求授权，会弹出 Shizuku 授权界面，应用将出现在 Shizuku 授权列表中
-                                                try {
-                                                    Shizuku.requestPermission(SHIZUKU_REQUEST_CODE)
-                                                } catch (e: Exception) {
-                                                    Log.e("MainActivity", "Shizuku requestPermission failed", e)
-                                                    android.widget.Toast.makeText(this@MainActivity, R.string.shizuku_request_failed_toast, android.widget.Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        Log.d("MainActivity", "Stopping Shizuku service")
-                                        AutoGLMShizukuService.stopService(this@MainActivity)
                                     }
                                 }
                             )

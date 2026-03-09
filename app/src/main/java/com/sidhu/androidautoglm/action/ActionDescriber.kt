@@ -111,9 +111,16 @@ object ActionDescriber {
      */
     fun describe(action: Action, context: Context): String {
         val params = when (action) {
+            is Action.Tap -> {
+                val m = mutableMapOf("element" to "[${action.x},${action.y}]")
+                action.confirmationMessage?.let { m["message"] = it }
+                m
+            }
             is Action.Type -> mapOf("text" to action.text)
             is Action.Launch -> mapOf("app" to action.appName)
             is Action.Finish -> action.message.takeIf { it.isNotEmpty() }?.let { mapOf("message" to it) }
+            is Action.TakeOver -> mapOf("message" to action.message)
+            is Action.CallApi -> mapOf("instruction" to action.instruction)
             is Action.Error -> mapOf("reason" to action.reason)
             else -> null
         }
@@ -156,6 +163,10 @@ private fun Action.toActionType(): ActionType = when (this) {
     is Action.Home -> ActionType.HOME
     is Action.Wait -> ActionType.WAIT
     is Action.Finish -> ActionType.FINISH
+    is Action.TakeOver -> ActionType.TAKE_OVER
+    Action.Interact -> ActionType.INTERACT
+    Action.Note -> ActionType.NOTE
+    is Action.CallApi -> ActionType.CALL_API
     is Action.Error -> ActionType.UNKNOWN
     Action.Unknown -> ActionType.UNKNOWN
 }

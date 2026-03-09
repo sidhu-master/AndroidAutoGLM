@@ -1,28 +1,33 @@
 package com.sidhu.androidautoglm
 
 import android.content.Context
-import android.os.Build
-import com.sidhu.androidautoglm.utils.DisplayUtils
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Path
+import android.os.Build
 import android.util.Log
+import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.LinearInterpolator
 import android.os.Handler
 import android.os.Looper
+import com.sidhu.androidautoglm.utils.DisplayUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlin.math.sqrt
+
+/** 主色：柔和青蓝 */
+private const val ACCENT_COLOR = 0xFF4FC3F7.toInt()
+/** 高亮：白色光晕 (50% alpha) */
+private val HIGHLIGHT_COLOR = Color.argb(128, 255, 255, 255)
 
 /**
  * Controller for managing gesture animations displayed to the user.
  * Handles visual feedback for tap, swipe, and long press gestures.
- *
- * Separated from AutoGLMService to follow single responsibility principle.
- * All animation operations are executed on the main thread.
  */
 class AnimationController(private val context: Context) {
 
@@ -30,41 +35,14 @@ class AnimationController(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val animationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    /**
-     * Shows a tap animation (pulsing circle) at the specified coordinates.
-     *
-     * @param x X coordinate of the tap
-     * @param y Y coordinate of the tap
-     * @param duration Duration of the animation in milliseconds
-     */
     fun showTapAnimation(x: Float, y: Float, duration: Long = 1000) {
         showGestureAnimation(x, y, null, null, duration)
     }
 
-    /**
-     * Shows a swipe animation (line trail + circle) from start to end coordinates.
-     *
-     * @param startX Starting X coordinate
-     * @param startY Starting Y coordinate
-     * @param endX Ending X coordinate
-     * @param endY Ending Y coordinate
-     * @param duration Duration of the animation in milliseconds
-     */
     fun showSwipeAnimation(startX: Float, startY: Float, endX: Float, endY: Float, duration: Long = 1000) {
         showGestureAnimation(startX, startY, endX, endY, duration)
     }
 
-    /**
-     * Shows a gesture animation at the specified coordinates.
-     * Supports both tap (single point) and swipe (start to end) animations.
-     * This method ensures all operations run on the main thread.
-     *
-     * @param startX Starting X coordinate
-     * @param startY Starting Y coordinate
-     * @param endX Ending X coordinate (null for tap animation)
-     * @param endY Ending Y coordinate (null for tap animation)
-     * @param duration Duration of the animation in milliseconds
-     */
     private fun showGestureAnimation(
         startX: Float,
         startY: Float,
@@ -72,7 +50,6 @@ class AnimationController(private val context: Context) {
         endY: Float? = null,
         duration: Long = 1000
     ) {
-        // Ensure we're on the main thread
         if (Looper.myLooper() != Looper.getMainLooper()) {
             animationScope.launch {
                 showGestureAnimationOnMainThread(startX, startY, endX, endY, duration)
@@ -85,63 +62,73 @@ class AnimationController(private val context: Context) {
     private fun showGestureAnimationOnMainThread(
         startX: Float,
         startY: Float,
-        endX: Float? = null,
-        endY: Float? = null,
-        duration: Long = 1000
+        endX: Float?,
+        endY: Float?,
+        duration: Long
     ) {
+        val isSwipe = endX != null && endY != null
+
         val view = object : View(context) {
-            private val paint = Paint().apply {
-                color = Color.YELLOW
+            val corePaint = Paint().apply {
+                isAntiAlias = true
                 style = Paint.Style.FILL
-                alpha = 150
+                color = ACCENT_COLOR
             }
-
-            // For swipe trail
-            private val trailPaint = Paint().apply {
-                color = Color.YELLOW
+            val ringPaint = Paint().apply {
+                isAntiAlias = true
                 style = Paint.Style.STROKE
-                strokeWidth = 20f
-                alpha = 100
-                strokeCap = Paint.Cap.ROUND
+                color = ACCENT_COLOR
+                strokeWidth = 4f
+            }
+            val glowPaint = Paint().apply {
+                isAntiAlias = true
+                style = Paint.Style.FILL
+                color = HIGHLIGHT_COLOR
             }
 
-            private var currentX = startX
-            private var currentY = startY
-            private var currentRadius = 30f
+            var trailFraction = 0f
+            var tapRadius = 0f
+            var tapRingRadius = 0f
+            var tapAlpha = 255
 
             override fun onDraw(canvas: Canvas) {
                 super.onDraw(canvas)
-                if (endX != null && endY != null) {
-                    // Draw trail from start to current
-                    canvas.drawLine(startX, startY, currentX, currentY, trailPaint)
-                }
-                canvas.drawCircle(currentX, currentY, currentRadius, paint)
-            }
-
-            fun startAnimation() {
-                if (endX != null && endY != null) {
-                    // Swipe Animation
-                    val animator = android.animation.ValueAnimator.ofFloat(0f, 1f)
-                    animator.duration = duration
-                    animator.addUpdateListener { animation ->
-                        val fraction = animation.animatedValue as Float
-                        currentX = startX + (endX - startX) * fraction
-                        currentY = startY + (endY - startY) * fraction
-                        invalidate()
+                if (isSwipe && endX != null && endY != null) {
+                    val dx = endX - startX
+                    val dy = endY - startY
+                    val len = sqrt(dx * dx + dy * dy)
+                    if (len > 1f) {
+                        val t = trailFraction
+                        val cx = startX + dx * t
+                        val cy = startY + dy * t
+                        val trailPaint = Paint().apply {
+                            isAntiAlias = true
+                            style = Paint.Style.STROKE
+                            strokeWidth = 20f
+                            strokeCap = Paint.Cap.ROUND
+                            strokeJoin = Paint.Join.ROUND
+                            color = ACCENT_COLOR
+                            alpha = 180
+                        }
+                        canvas.drawLine(startX, startY, cx, cy, trailPaint)
+                        glowPaint.alpha = (220 * (1 - t * 0.4f)).toInt().coerceIn(0, 255)
+                        canvas.drawCircle(cx, cy, 26f, glowPaint)
+                        corePaint.alpha = 230
+                        canvas.drawCircle(cx, cy, 16f, corePaint)
                     }
-                    animator.start()
                 } else {
-                    // Tap Animation: Pulse effect
-                    val animator = android.animation.ValueAnimator.ofFloat(0f, 1f)
-                    animator.duration = duration
-                    animator.addUpdateListener { animation ->
-                        val fraction = animation.animatedValue as Float
-                        // Expand and fade
-                        currentRadius = 30f + 30f * fraction
-                        paint.alpha = (150 * (1 - fraction)).toInt()
-                        invalidate()
+                    if (tapRadius > 0) {
+                        corePaint.alpha = (tapAlpha * 0.55f).toInt().coerceIn(0, 255)
+                        canvas.drawCircle(startX, startY, tapRadius, corePaint)
                     }
-                    animator.start()
+                    if (tapRingRadius > 0) {
+                        ringPaint.alpha = (tapAlpha * 0.85f).toInt().coerceIn(0, 255)
+                        canvas.drawCircle(startX, startY, tapRingRadius, ringPaint)
+                    }
+                    if (tapRadius > 0 || tapRingRadius > 0) {
+                        glowPaint.alpha = (tapAlpha * 0.35f).toInt().coerceIn(0, 255)
+                        canvas.drawCircle(startX, startY, (tapRadius + tapRingRadius) / 2f, glowPaint)
+                    }
                 }
             }
         }
@@ -161,30 +148,53 @@ class AnimationController(private val context: Context) {
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             android.graphics.PixelFormat.TRANSLUCENT
-        )
-
-        params.gravity = android.view.Gravity.TOP or android.view.Gravity.START
-        params.x = 0
-        params.y = 0
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
+        }
 
         try {
             windowManager.addView(view, params)
-            // Start animation after view is added
-            view.startAnimation()
-            // Remove view after animation completes
-            mainHandler.postDelayed({
-                try {
-                    windowManager.removeView(view)
-                } catch (e: Exception) {
-                    // Ignore - view may already be removed
+            view.alpha = 0f
+            view.animate().alpha(1f).setDuration(80).start()
+
+            if (isSwipe && endX != null && endY != null) {
+                android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+                    this.duration = duration
+                    interpolator = LinearInterpolator()
+                    addUpdateListener { anim ->
+                        view.trailFraction = anim.animatedValue as Float
+                        view.invalidate()
+                    }
+                    start()
                 }
-            }, duration + 200)
+            } else {
+                val decelerate = DecelerateInterpolator()
+                android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+                    this.duration = duration
+                    addUpdateListener { anim ->
+                        val f = anim.animatedValue as Float
+                        val eased = decelerate.getInterpolation(f)
+                        view.tapRadius = 10f + 52f * eased
+                        view.tapRingRadius = 14f + 60f * eased
+                        view.tapAlpha = (255 * (1 - f * 0.92f)).toInt().coerceIn(0, 255)
+                        view.invalidate()
+                    }
+                    start()
+                }
+            }
+
+            mainHandler.postDelayed({
+                view.animate().alpha(0f).setDuration(120).withEndAction {
+                    try { windowManager.removeView(view) } catch (_: Exception) {}
+                }.start()
+            }, duration + 80)
         } catch (e: Exception) {
             Log.e("AnimationController", "Failed to show gesture animation", e)
         }
     }
 
     private fun getScreenWidth(): Int = DisplayUtils.getScreenWidth(context)
-
     private fun getScreenHeight(): Int = DisplayUtils.getScreenHeight(context)
 }

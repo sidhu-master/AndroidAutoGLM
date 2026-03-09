@@ -254,27 +254,26 @@ class WakeUpInputController(private val context: Context) : LifecycleOwner, View
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
 
-        // 先立即显示 UI，音效后台播放；播放完成后再启动麦克风（避免将「我在呢」误识别为命令）
+        // 立即显示 UI 并启动麦克风，音效后台播放；提前录音避免漏掉用户命令的第一个字
+        // 识别结果中的「我在呢」/唤醒词会在 WakeWordDetector 中自动去除
         initWindowParams()
         initView()
         try {
             windowManager.addView(floatView, windowParams)
             isShowing = true
-            Log.d(TAG, "show: 已添加 UI, 播放 1.mp3，播放完成后才启动麦克风监听")
-            playSound("1.mp3") {
-                // 音效播放完毕后再启动麦克风，避免拾取扬声器输出
-                if (isShowing && !_isKeyboardMode) {
-                    Log.d(TAG, "show: 音效播放完成，启动 startCommandMode")
-                    WakeWordDetector.startCommandMode(context)
-                    coroutineScope.launch {
-                        WakeWordDetector.realtimeCommand.collect { partial ->
-                            if (_uiState == InputUIState.Listening && !_isKeyboardMode && !partial.isNullOrEmpty()) {
-                                _recognizedText = partial
-                            }
+            Log.d(TAG, "show: 已添加 UI, 立即启动麦克风监听（音效后台播放）")
+            // 立即启动录音，不再等待音效结束，避免用户开口时尚未开始录音导致漏字
+            if (!_isKeyboardMode) {
+                WakeWordDetector.startCommandMode(context)
+                coroutineScope.launch {
+                    WakeWordDetector.realtimeCommand.collect { partial ->
+                        if (_uiState == InputUIState.Listening && !_isKeyboardMode && !partial.isNullOrEmpty()) {
+                            _recognizedText = partial
                         }
                     }
                 }
             }
+            playSound("1.mp3") { /* 音效仅作提示，不再阻塞录音启动 */ }
         } catch (e: Exception) {
             e.printStackTrace()
         }

@@ -70,6 +70,20 @@
             android:enabled="true"
             android:exported="true"
             android:permission="android.permission.INTERNET" />
+
+        <!-- 内置 ADBKeyboard：通过广播输入文字，无需单独安装输入法应用 -->
+        <service
+            android:name=".input.AdbIME"
+            android:label="@string/ime_label"
+            android:exported="true"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
     </application>
 
 </manifest>

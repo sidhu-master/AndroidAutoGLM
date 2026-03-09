@@ -1,9 +1,11 @@
 package com.sidhu.androidautoglm.action
 
 import android.util.Log
+import com.sidhu.androidautoglm.vision.MasterAction
 
 sealed class Action {
-    data class Tap(val x: Int, val y: Int) : Action()
+    /** 普通点击；confirmationMessage 非空时表示敏感操作需用户确认 */
+    data class Tap(val x: Int, val y: Int, val confirmationMessage: String? = null) : Action()
     data class DoubleTap(val x: Int, val y: Int) : Action()
     data class LongPress(val x: Int, val y: Int) : Action()
     data class Swipe(val startX: Int, val startY: Int, val endX: Int, val endY: Int) : Action()
@@ -13,6 +15,14 @@ sealed class Action {
     object Home : Action()
     data class Wait(val durationMs: Long) : Action()
     data class Finish(val message: String) : Action()
+    /** 登录/验证码等需用户协助 */
+    data class TakeOver(val message: String) : Action()
+    /** 多个选项时需用户选择 */
+    object Interact : Action()
+    /** 记录页面内容（占位，无实际操作） */
+    object Note : Action()
+    /** 总结/评论页面（占位，无实际操作） */
+    data class CallApi(val instruction: String) : Action()
     data class Error(val reason: String) : Action()
     object Unknown : Action()
 }
@@ -30,18 +40,21 @@ object ActionParser {
     )
 
     /**
-     * 找到文本中最后一个 do(...) 或 finish(...) 的起始位置。
-     * 取最后一个是因为模型在上一步失败后会重新输出 fallback 动作。
+     * 找到文本中要执行的 action 的起始位置。
+     * - 若只有 do 或只有 finish：取最后一个（支持 fallback 场景）
+     * - 若同时有 do 和 finish：优先取最后一个 do，避免模型在未执行 Type/发送 时就 finish
+     *   （常见：模型输出 do(Type) 和 finish 同句，误以为已发送，实际未执行）
      * @return 起始索引，未找到返回 -1
      */
     private fun findActionStart(text: String): Int {
         val lastDo = text.lastIndexOf("do(")
         val lastFinish = text.lastIndexOf("finish(")
         return when {
-            lastDo > lastFinish -> lastDo
-            lastFinish >= 0 -> lastFinish
-            lastDo >= 0 -> lastDo
-            else -> -1
+            lastDo < 0 && lastFinish < 0 -> -1
+            lastDo < 0 -> lastFinish
+            lastFinish < 0 -> lastDo
+            // 同时存在：优先执行 do，避免过早 finish（如 Type+finish 时先执行 Type）
+            else -> lastDo
         }
     }
 
@@ -307,7 +320,8 @@ object ActionParser {
             return when (actionType.lowercase()) {
                 "tap" -> {
                     val element = params["element"] as? List<*>
-                    parseTapAction(element, screenWidth, screenHeight) { x, y -> Action.Tap(x, y) }
+                    val msg = params["message"]?.toString()
+                    parseTapAction(element, screenWidth, screenHeight) { x, y -> Action.Tap(x, y, msg) }
                 }
                 "double tap" -> {
                     val element = params["element"] as? List<*>
@@ -350,6 +364,16 @@ object ActionParser {
                     val durationSeconds = durationStr.replace("seconds", "").trim().toDoubleOrNull() ?: 1.0
                     Action.Wait((durationSeconds * 1000).toLong())
                 }
+                "take_over" -> {
+                    val msg = params["message"]?.toString() ?: "需要用户协助"
+                    Action.TakeOver(msg)
+                }
+                "interact" -> Action.Interact
+                "note" -> Action.Note
+                "call_api" -> {
+                    val instruction = params["instruction"]?.toString() ?: ""
+                    Action.CallApi(instruction)
+                }
                 else -> Action.Unknown
             }
         }
@@ -359,7 +383,74 @@ object ActionParser {
     }
 
     private fun parseParams(args: String): Map<String, Any> {
-        // Delegate to unified parsing function, return only normalized params
         return parseActionParams(args).second
+    }
+
+    // -----------------------------------------------------------------------
+    // New architecture: parse master AI output into MasterAction (target-based)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Parse the master AI's response into a [MasterAction].
+     * Supports both the new target/direction format and legacy element/coordinate format.
+     */
+    fun parseMasterAction(response: String): MasterAction {
+        val actionStr = extractActionString(response)
+        if (actionStr.isBlank()) {
+            return MasterAction.Finish(response.trim())
+        }
+        return parseMasterActionString(actionStr)
+    }
+
+    private fun parseMasterActionString(actionString: String): MasterAction {
+        val clean = actionString.trim()
+
+        FINISH_REGEX.find(clean)?.let {
+            return MasterAction.Finish(it.groupValues[1])
+        }
+
+        val doMatch = DO_REGEX.find(clean) ?: return MasterAction.Error("Unknown format: $clean")
+        val args = doMatch.groupValues[1]
+        val (rawParams, _) = parseActionParams(args)
+
+        val actionType = rawParams["action"] ?: return MasterAction.Error("Missing action type")
+
+        return when (actionType.lowercase()) {
+            "tap" -> {
+                val target = rawParams["target"]
+                if (target != null) MasterAction.Tap(target)
+                else MasterAction.Error("Missing target for Tap")
+            }
+            "double tap" -> {
+                val target = rawParams["target"]
+                if (target != null) MasterAction.DoubleTap(target)
+                else MasterAction.Error("Missing target for Double Tap")
+            }
+            "long press" -> {
+                val target = rawParams["target"]
+                if (target != null) MasterAction.LongPress(target)
+                else MasterAction.Error("Missing target for Long Press")
+            }
+            "swipe" -> {
+                val direction = rawParams["direction"]
+                if (direction != null) MasterAction.Swipe(direction)
+                else MasterAction.Error("Missing direction for Swipe")
+            }
+            "type", "type_name" -> {
+                val text = rawParams["text"] ?: return MasterAction.Error("Missing text for Type")
+                MasterAction.Type(text)
+            }
+            "launch" -> {
+                val app = rawParams["app"] ?: return MasterAction.Error("Missing app for Launch")
+                MasterAction.Launch(app)
+            }
+            "back" -> MasterAction.Back
+            "home" -> MasterAction.Home
+            "wait" -> {
+                val dur = rawParams["duration"]?.replace("seconds", "")?.trim()?.toFloatOrNull() ?: 1f
+                MasterAction.Wait(dur)
+            }
+            else -> MasterAction.Unknown
+        }
     }
 }

@@ -426,7 +426,8 @@ object WakeWordDetector {
 
                             if (partialFrames > 8000) {
                                 recognizer.decode(currentStream)
-                                val partial = recognizer.getResult(currentStream).text.trim()
+                                val raw = recognizer.getResult(currentStream).text.trim()
+                                val partial = stripFeedbackFromCommand(raw)
                                 if (partial.isNotBlank()) {
                                     Log.i(TAG, "Command partial: $partial")
                                     _realtimeCommand.emit(partial)
@@ -466,12 +467,14 @@ object WakeWordDetector {
                     val result = recognizer.getResult(finalStream)
                     finalStream.release()
 
-                    val finalText = result.text.trim()
+                    var finalText = result.text.trim()
+                    finalText = stripFeedbackFromCommand(finalText)
                     Log.i(TAG, "Command final result: \"$finalText\" (blank=${finalText.isBlank()}, hallucination=${isHallucination(finalText)})")
 
                     withContext(Dispatchers.Main) {
-                        if (finalText.isBlank() || isHallucination(finalText)) {
-                            Log.w(TAG, "Command rejected: blank or hallucination -> onError")
+                        val tooShort = finalText.length < 2  // 防止「我在呢」后用户未说话就误触发
+                        if (finalText.isBlank() || tooShort || isHallucination(finalText)) {
+                            Log.w(TAG, "Command rejected: blank=${finalText.isBlank()}, tooShort=$tooShort, hallucination -> onError")
                             onError?.invoke("未能识别，请重试")
                         } else {
                             Log.i(TAG, "Command accepted -> onCommandReceived(\"$finalText\")")
@@ -618,11 +621,45 @@ object WakeWordDetector {
     }
 
     // =========================================================
+    // 反馈语/唤醒词去除（提前录音时可能被录入，需从结果开头去除）
+    // =========================================================
+
+    /** 从命令开头去除「我在呢」、唤醒词等反馈语，避免误当作用户指令 */
+    private fun stripFeedbackFromCommand(text: String): String {
+        if (text.isBlank()) return text
+        var result = text.trim()
+        val prefixes = listOf(
+            "我在呢",
+            "我在",
+            _wakeWord.value
+        ).filter { it.isNotBlank() }.sortedByDescending { it.length }
+        var changed = true
+        while (changed) {
+            changed = false
+            for (prefix in prefixes) {
+                if (prefix.isBlank()) continue
+                val lower = result.lowercase()
+                val p = prefix.lowercase()
+                if (lower.startsWith(p)) {
+                    result = result.substring(prefix.length).trim()
+                    if (result.startsWith("，") || result.startsWith(",")) result = result.substring(1).trim()
+                    Log.d(TAG, "stripFeedbackFromCommand: 去除前缀 \"$prefix\" -> \"$result\"")
+                    changed = true
+                    break
+                }
+            }
+        }
+        return result
+    }
+
+    // =========================================================
     // 幻听过滤
     // =========================================================
 
     private fun isHallucination(text: String): Boolean {
         val lower = text.lowercase().trim()
-        return lower.isBlank() || lower == "." || lower == "。" || lower == "，"
+        if (lower.isBlank()) return true
+        val fillers = setOf(".", "。", "，", ",", "呃", "嗯", "啊", "哦", "唉", "哎")
+        return lower in fillers
     }
 }

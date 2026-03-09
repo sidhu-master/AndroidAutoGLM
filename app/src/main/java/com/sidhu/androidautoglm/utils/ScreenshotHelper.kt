@@ -6,6 +6,7 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.lang.reflect.Method
 
 /**
  * Screenshot utility using Shizuku.
@@ -15,35 +16,31 @@ object ScreenshotHelper {
 
     private const val TAG = "ScreenshotHelper"
 
+    /** 准备阶段结果，供 execute 使用。准备阶段不隐藏悬浮窗。 */
+    data class PreparedScreencap(val newProcessMethod: Method)
 
     /**
-     * Take screenshot via Shizuku using stdout pipe.
-     * This is the most reliable method - reads PNG data directly from screencap stdout.
+     * 准备截屏环境（Shizuku 检查、权限、反射），不隐藏悬浮窗。
+     * 返回 null 表示不可用，调用方无需再隐藏。
      */
-    suspend fun captureViaShizukuOnly(): Bitmap? = withContext(Dispatchers.IO) {
-        try {
+    fun prepareScreencap(): PreparedScreencap? {
+        return try {
             val shizukuClass = Class.forName("rikka.shizuku.Shizuku")
-
-            // Check Shizuku availability
             val pingBinderMethod = shizukuClass.getMethod("pingBinder")
             try {
                 pingBinderMethod.invoke(null)
             } catch (e: Exception) {
                 Log.w(TAG, "[Screenshot] Shizuku not available: ${e.message}")
-                return@withContext null
+                return null
             }
-
-            // Check permission
             val checkPermissionMethod = shizukuClass.getMethod("checkSelfPermission")
             val permissionResult = checkPermissionMethod.invoke(null) as Int
             val packageManagerClass = Class.forName("android.content.pm.PackageManager")
             val permissionGranted = packageManagerClass.getField("PERMISSION_GRANTED").getInt(null)
             if (permissionResult != permissionGranted) {
                 Log.w(TAG, "[Screenshot] Shizuku permission not granted")
-                return@withContext null
+                return null
             }
-
-            // Get newProcess method
             val newProcessMethod = shizukuClass.getDeclaredMethod(
                 "newProcess",
                 Array<String>::class.java,
@@ -51,67 +48,75 @@ object ScreenshotHelper {
                 String::class.java
             )
             newProcessMethod.isAccessible = true
+            PreparedScreencap(newProcessMethod)
+        } catch (e: Exception) {
+            Log.e(TAG, "[Screenshot] Prepare error: ${e.message}", e)
+            null
+        }
+    }
 
-            // Execute screencap command - output to stdout (not file)
+    /**
+     * 执行截屏（需在悬浮窗已隐藏后调用）。
+     * 仅包含 screencap 启动 + 读 stdout，无解码。
+     */
+    suspend fun executeScreencap(prepared: PreparedScreencap): ByteArray? = withContext(Dispatchers.IO) {
+        try {
             val cmd = "screencap -p"
             Log.d(TAG, "[Screenshot] Running: $cmd")
-
-            val process = newProcessMethod.invoke(
+            val process = prepared.newProcessMethod.invoke(
                 null,
                 arrayOf("sh", "-c", cmd),
                 null,
                 null
             ) as Process
-
-            // Read stdout FIRST (before waitFor - avoids buffer blocking)
             val stdout = process.inputStream
             val stderr = process.errorStream
-
             val byteArrayOutputStream = ByteArrayOutputStream()
             val buffer = ByteArray(8192)
             var bytesRead: Int
-
-            // Read stdout in chunks
             while (stdout.read(buffer).also { bytesRead = it } != -1) {
                 byteArrayOutputStream.write(buffer, 0, bytesRead)
             }
-
-            // Also read stderr for debugging
             val stderrBytes = ByteArrayOutputStream()
             while (stderr.read(buffer).also { bytesRead = it } != -1) {
                 stderrBytes.write(buffer, 0, bytesRead)
             }
             val stderrOutput = stderrBytes.toString().trim()
-            if (stderrOutput.isNotEmpty()) {
-                Log.w(TAG, "[Screenshot] stderr: $stderrOutput")
-            }
-
-            // Now wait for process to finish
+            if (stderrOutput.isNotEmpty()) Log.w(TAG, "[Screenshot] stderr: $stderrOutput")
             val exitCode = process.waitFor()
-
             if (exitCode != 0) {
                 Log.e(TAG, "[Screenshot] screencap failed with exit code: $exitCode")
                 return@withContext null
             }
-
-            val screenshotData = byteArrayOutputStream.toByteArray()
-            if (screenshotData.isEmpty()) {
+            val data = byteArrayOutputStream.toByteArray()
+            if (data.isEmpty()) {
                 Log.e(TAG, "[Screenshot] No data received")
                 return@withContext null
             }
-
-            // Decode PNG data to Bitmap
-            val bitmap = BitmapFactory.decodeByteArray(screenshotData, 0, screenshotData.size)
-            if (bitmap != null) {
-                Log.d(TAG, "[Screenshot] Success: ${bitmap.width}x${bitmap.height}, size: ${screenshotData.size} bytes")
-                return@withContext bitmap
-            } else {
-                Log.e(TAG, "[Screenshot] Failed to decode PNG data")
-                return@withContext null
-            }
-
+            Log.d(TAG, "[Screenshot] Raw capture: ${data.size} bytes")
+            data
         } catch (e: Exception) {
-            Log.e(TAG, "[Screenshot] Error: ${e.message}", e)
+            Log.e(TAG, "[Screenshot] Execute error: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * 完整流程：准备 + 执行 + 解码。用于无 service 时的 fallback。
+     */
+    suspend fun captureViaShizukuOnlyRaw(): ByteArray? {
+        val prepared = prepareScreencap() ?: return null
+        return executeScreencap(prepared)
+    }
+
+    suspend fun captureViaShizukuOnly(): Bitmap? {
+        val data = captureViaShizukuOnlyRaw() ?: return null
+        val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+        return if (bitmap != null) {
+            Log.d(TAG, "[Screenshot] Decoded: ${bitmap.width}x${bitmap.height}")
+            bitmap
+        } else {
+            Log.e(TAG, "[Screenshot] Failed to decode image data")
             null
         }
     }

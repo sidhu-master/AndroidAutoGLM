@@ -4,11 +4,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
@@ -37,7 +36,7 @@ import kotlinx.coroutines.withContext
 /**
  * AutoGLMShizukuService - 基于 Shizuku 的前台服务
  *
- * 当用户选择 Shizuku 模式时使用此服务。
+ * 基于 Shizuku 的前台服务。
  * 作为前台服务运行，支持语音唤醒功能。
  *
  * 功能：
@@ -425,59 +424,58 @@ class AutoGLMShizukuService : Service(), IGLMService {
     }
 
     /**
-     * Shizuku 模式文字输入
-     *
-     * 策略 A（首选）：检测到 ADB Keyboard 为当前 IME 时，使用 broadcast 方式
-     *   1. Ctrl+A 全选 → Delete 清空 → ADB_INPUT_TEXT 输入
-     *   支持中文及所有 Unicode，最可靠。
-     *
-     * 策略 B（回退）：剪贴板 + KEYCODE_PASTE
-     *   无法全选清空，但对空输入框（搜索栏等常见场景）有效。
+     * Shizuku 模式文字输入：仅使用内置 AdbIME broadcast，支持清空后输入。
+     * 需在设置中启用「AutoGLM 输入」键盘。
      */
     override suspend fun performDirectTextInput(text: String): Boolean {
         if (text.isEmpty()) return false
         return try {
-            // 检查当前 IME 是否是 ADB Keyboard
+            // 从系统获取本应用 IME 的实际 ID（ime 命令对 ID 格式敏感，需用系统返回的格式）
+            val imeId = resolveOurImeId()
+            Log.d(TAG, "performDirectTextInput: imeId=$imeId")
+
             val (_, imeOut) = ShizukuHelper.executeShellCommandWithOutput(
                 "settings get secure default_input_method"
             )
-            val isAdbKeyboard = imeOut.contains("adbkeyboard", ignoreCase = true)
-            Log.d(TAG, "performDirectTextInput: isAdbKeyboard=$isAdbKeyboard, text='${text.take(20)}...'")
+            val currentIme = imeOut.trim()
+            val isOurIme = currentIme.contains("adbkeyboard", ignoreCase = true) ||
+                currentIme.contains("androidautoglm", ignoreCase = true)
+            Log.d(TAG, "performDirectTextInput: currentIme=$currentIme, isOurIme=$isOurIme")
 
-            if (isAdbKeyboard) {
-                // 策略 A：ADB Keyboard broadcast
-                // Step 1: Ctrl+A 全选（code=29 KEYCODE_A, metaState=12288 = META_CTRL_ON|META_CTRL_LEFT_ON）
-                ShizukuHelper.executeShellCommand(
-                    "am broadcast -a ADB_INPUT_CODE --ei code 29 --ei metaState 12288"
-                )
-                delay(80)
-                // Step 2: Delete 删除选中内容
-                ShizukuHelper.executeShellCommand(
-                    "am broadcast -a ADB_INPUT_CODE --ei code 67"
-                )
-                delay(80)
-                // Step 3: 输入新文字（只转义双引号和反斜杠即可，其他字符直接传入）
-                val escapedMsg = text.replace("\\", "\\\\").replace("\"", "\\\"")
-                val (ok, out) = ShizukuHelper.executeShellCommandWithOutput(
-                    "am broadcast -a ADB_INPUT_TEXT --es msg \"$escapedMsg\""
-                )
-                Log.d(TAG, "ADB Keyboard broadcast result: ok=$ok out=$out")
-                delay(200)
-                ok
-            } else {
-                // 策略 B：剪贴板 + KEYCODE_PASTE（不依赖特定输入法）
-                // 通过 Android API 设置剪贴板，无需 shell 转义，支持所有 Unicode
-                withContext(Dispatchers.Main) {
-                    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    clipboard.setPrimaryClip(ClipData.newPlainText("autoglm_input", text))
+            var switched = false
+            if (!isOurIme) {
+                val enableOk = ShizukuHelper.executeShellCommand("ime enable $imeId")
+                val setOk = ShizukuHelper.executeShellCommand("ime set $imeId")
+                switched = enableOk && setOk
+                Log.d(TAG, "performDirectTextInput: ime enable=$enableOk, set=$setOk")
+                if (!switched) {
+                    Log.e(TAG, "performDirectTextInput: 无法切换 IME。请到 设置→系统→语言和输入→屏幕键盘→管理屏幕键盘 中勾选「AutoGLM 输入」")
+                    return@performDirectTextInput false
                 }
-                delay(150)
-                // KEYCODE_PASTE = 279，粘贴到当前焦点输入框
-                val pasteOk = ShizukuHelper.executeShellCommand("input keyevent 279")
-                Log.d(TAG, "Clipboard+paste result: $pasteOk")
-                delay(200)
-                pasteOk
+                // IME 切换后需等待 InputConnection 建立（微信等 app 可能较慢）
+                delay(600)
             }
+
+            // 使用 -p 指定包名，确保广播送达本应用；重试一次以应对 InputConnection 建立较慢
+            val broadcastPrefix = "am broadcast -p $packageName"
+            val escapedMsg = text.replace("\\", "\\\\").replace("\"", "\\\"")
+            repeat(2) { attempt ->
+                ShizukuHelper.executeShellCommand("$broadcastPrefix -a ADB_CLEAR_TEXT")
+                delay(120)
+                ShizukuHelper.executeShellCommandWithOutput(
+                    "$broadcastPrefix -a ADB_INPUT_TEXT --es msg \"$escapedMsg\""
+                )
+                Log.d(TAG, "performDirectTextInput: broadcast attempt=${attempt + 1}")
+                if (attempt == 0) delay(400)
+            }
+            val ok = true
+            delay(200)
+
+            if (switched && currentIme.isNotBlank() && !currentIme.contains("androidautoglm", ignoreCase = true)) {
+                ShizukuHelper.executeShellCommand("ime set $currentIme")
+                Log.d(TAG, "performDirectTextInput: restored IME to $currentIme")
+            }
+            ok
         } catch (e: Exception) {
             Log.e(TAG, "performDirectTextInput failed: ${e.message}", e)
             false
@@ -522,6 +520,28 @@ class AutoGLMShizukuService : Service(), IGLMService {
         }
     }
 
+    /** 解析本应用 IME 的 ID，优先用 InputMethodManager 获取系统格式 */
+    private fun resolveOurImeId(): String {
+        runCatching {
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+            imm?.enabledInputMethodList?.find { it.packageName == packageName }?.id?.let { id ->
+                Log.d(TAG, "resolveOurImeId: from IMM -> $id")
+                return id
+            }
+        }
+        val (ok, out) = ShizukuHelper.executeShellCommandWithOutput("ime list -a")
+        if (ok && out.isNotBlank()) {
+            val idPattern = Regex("""($packageName/[^\s:]+AdbIME[^\s:]*)""")
+            idPattern.find(out)?.groupValues?.get(1)?.let { id ->
+                Log.d(TAG, "resolveOurImeId: from ime list -> $id")
+                return id
+            }
+        }
+        val fallback = "$packageName/com.sidhu.androidautoglm.input.AdbIME"
+        Log.d(TAG, "resolveOurImeId: using fallback $fallback")
+        return fallback
+    }
+
     /** 从 cmd package resolve-activity 输出解析 component */
     private fun parseResolveActivityComponent(output: String): String? {
         val nameRegex = Regex("""name=([^\s]+/[^\s]+)""")
@@ -542,15 +562,16 @@ class AutoGLMShizukuService : Service(), IGLMService {
 
     override suspend fun takeScreenshot(timeoutMs: Long): Bitmap? {
         Log.d(TAG, "takeScreenshot: start, timeoutMs=$timeoutMs")
-        // FloatingWindowController.useWindowSuspension 内部已负责隐藏/恢复悬浮窗
-        // AnimationController 的动画视图是瞬态自清除的，无需单独隐藏
-        return _floatingWindowController?.useWindowSuspension {
+        // 准备阶段不隐藏；仅在真正执行 screencap 时隐藏
+        val prepared = ScreenshotHelper.prepareScreencap() ?: return null
+        val rawBytes = _floatingWindowController?.useWindowSuspension {
             delay(30)
-            ScreenshotHelper.captureViaShizukuOnly()
+            ScreenshotHelper.executeScreencap(prepared)
         } ?: run {
             delay(30)
-            ScreenshotHelper.captureViaShizukuOnly()
+            ScreenshotHelper.executeScreencap(prepared)
         }
+        return rawBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
     }
 
     override fun updateFloatingStatus(text: String) {

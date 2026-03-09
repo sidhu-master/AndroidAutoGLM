@@ -253,7 +253,7 @@ fun ChatScreen(
                         }
                 ) {
                     Image(
-                        painter = painterResource(id = R.mipmap.ic_launcher),
+                        painter = painterResource(id = R.drawable.ic_launcher_logo),
                         contentDescription = null,
                         modifier = Modifier
                             .padding(end = 8.dp)
