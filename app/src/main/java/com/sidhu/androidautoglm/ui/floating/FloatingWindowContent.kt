@@ -455,12 +455,7 @@ fun FloatingWindowContent(
 
                                 val startJob = scope.launch(Dispatchers.Main) {
                                     voiceResultText = ""
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                        vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
-                                    } else {
-                                        @Suppress("DEPRECATION")
-                                        vibrator.vibrate(50)
-                                    }
+                                    vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
                                     speechRecognizerManager.startListening(
                                         onResultCallback = { result -> voiceResultText = result },
                                         onErrorCallback = { error ->
@@ -494,12 +489,7 @@ fun FloatingWindowContent(
                                     if (cancelled || isCancelling) {
                                         speechRecognizerManager.cancel()
                                     } else {
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                            vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
-                                        } else {
-                                            @Suppress("DEPRECATION")
-                                            vibrator.vibrate(50)
-                                        }
+                                        vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
                                         speechRecognizerManager.stopListening()
                                         if (voiceResultText.isNotBlank()) {
                                             showVoiceReview = true

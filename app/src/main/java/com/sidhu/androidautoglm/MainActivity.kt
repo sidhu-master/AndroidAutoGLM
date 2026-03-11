@@ -19,6 +19,7 @@ import com.sidhu.androidautoglm.AutoGLMShizukuService
 import com.sidhu.androidautoglm.ui.ChatScreen
 import com.sidhu.androidautoglm.ui.ChatViewModel
 import com.sidhu.androidautoglm.ui.SettingsScreen
+import com.sidhu.androidautoglm.ui.ShizukuSettingsScreen
 import com.sidhu.androidautoglm.ui.MarkdownViewerScreen
 import com.sidhu.androidautoglm.ui.WebViewScreen
 import com.sidhu.androidautoglm.ui.ConversationListScreen
@@ -32,6 +33,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.util.Log
 import rikka.shizuku.Shizuku
+import com.sidhu.androidautoglm.utils.ShizukuHelper
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
@@ -42,14 +44,10 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
-    companion object {
-        private const val SHIZUKU_REQUEST_CODE = 0xCA07
-    }
-
     private val viewModel: ChatViewModel by viewModels()
 
     private val shizukuPermissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
-        if (requestCode == SHIZUKU_REQUEST_CODE) {
+        if (requestCode == com.sidhu.androidautoglm.utils.ShizukuHelper.REQUEST_CODE) {
             runOnUiThread {
                 if (grantResult == PackageManager.PERMISSION_GRANTED) {
                     Log.d("MainActivity", "Shizuku permission granted, starting service")
@@ -92,6 +90,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val requestNotificationPermissionLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            AutoGLMShizukuService.startService(this@MainActivity)
+            viewModel.checkShizukuConnection(this@MainActivity)
+        }
+        // 用户拒绝时服务不启动，需在系统设置中开启通知权限后重启应用
+    }
+
     private var pendingWakeWordEnable = false
 
     private fun enableWakeWordAfterPermissionGranted() {
@@ -115,7 +123,16 @@ class MainActivity : ComponentActivity() {
         isWakeWordEnabledState.value = prefs.getBoolean("wake_up_enabled", false)
         var isWakeWordEnabled by isWakeWordEnabledState
         var wakeWord by mutableStateOf(prefs.getString("wake_word", "皮皮虾") ?: "皮皮虾")
-        AutoGLMShizukuService.startService(this)
+        // Android 13+ 需 POST_NOTIFICATIONS 才能启动前台服务，否则 startForeground 会崩溃
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+                AutoGLMShizukuService.startService(this)
+            } else {
+                requestNotificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        } else {
+            AutoGLMShizukuService.startService(this)
+        }
 
         val locale = if (savedLang == "zh") Locale.CHINESE else Locale.ENGLISH
         val config = resources.configuration
@@ -123,6 +140,7 @@ class MainActivity : ComponentActivity() {
         resources.updateConfiguration(config, resources.displayMetrics)
 
         super.onCreate(savedInstanceState)
+        ShizukuHelper.init()
         
         handleIntent(intent)
         
@@ -167,6 +185,7 @@ class MainActivity : ComponentActivity() {
                             ChatScreen(
                                 viewModel = viewModel,
                                 onOpenSettings = { navController.navigate("settings") },
+                                onOpenShizukuSettings = { navController.navigate("shizuku_settings") },
                                 onOpenConversationList = { navController.navigate("conversation_list") }
                             )
                         }
@@ -270,6 +289,7 @@ class MainActivity : ComponentActivity() {
                                     viewModel.updateSettings(newKey, newBaseUrl, newIsGemini, newModelName)
                                 },
                                 onBack = { navController.popBackStack() },
+                                onOpenShizukuSettings = { navController.navigate("shizuku_settings") },
                                 onOpenDocumentation = { navController.navigate("documentation") },
                                 onOpenUrl = { url ->
                                     val encodedUrl = URLEncoder.encode(url, StandardCharsets.UTF_8.toString())
@@ -311,6 +331,15 @@ class MainActivity : ComponentActivity() {
                                         shizukuService?.startWakeWordListening()
                                     }
                                 }
+                            )
+                        }
+                        composable("shizuku_settings") {
+                            ShizukuSettingsScreen(
+                                onBack = { navController.popBackStack() },
+                                onShizukuStarted = {
+                                    viewModel.checkShizukuConnection(this@MainActivity)
+                                },
+                                onOpenDocumentation = { navController.navigate("documentation") }
                             )
                         }
                         composable("documentation") {

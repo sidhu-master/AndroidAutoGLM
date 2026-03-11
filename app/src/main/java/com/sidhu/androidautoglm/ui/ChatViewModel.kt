@@ -24,7 +24,6 @@ import com.sidhu.androidautoglm.data.TaskEndState
 import com.sidhu.androidautoglm.data.entity.Conversation as DbConversation
 import java.text.SimpleDateFormat
 import java.util.Date
-import android.os.Build
 import android.provider.Settings
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -65,6 +64,7 @@ data class ChatUiState(
     val error: String? = null,
     val missingOverlayPermission: Boolean = false,
     val missingBatteryExemption: Boolean = false,
+    val imeEnabled: Boolean = false,
     val shizukuConnected: Boolean = false,
     val apiKey: String = "",
     val baseUrl: String = "https://open.bigmodel.cn/api/paas/v4",
@@ -72,7 +72,7 @@ data class ChatUiState(
     val modelName: String = "autoglm-phone",
     val activeConversationId: Long? = null,
     val currentConversation: DbConversation? = null,
-    // Master model (planning): task list, dispatch
+    // Master model (planning): task list, dispatch，默认 MiniMax-M2.5，API Key 从 local.properties 的 MINIMAX_API_KEY 读取
     val masterApiKey: String = "",
     val masterBaseUrl: String = "https://api.minimaxi.com/v1",
     val masterIsGemini: Boolean = false,
@@ -235,7 +235,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val savedIsGemini = prefs.getBoolean("is_gemini", false)
         val savedModelName = prefs.getString("model_name", "autoglm-phone") ?: "autoglm-phone"
 
-        // Master config: if not set, use MiniMax defaults; key from MINIMAX_API_KEY when blank
+        // Master config: 默认 MiniMax-M2.5，API Key 从 local.properties 的 MINIMAX_API_KEY 读取
         val hasMasterConfig = prefs.contains("master_api_key") || prefs.contains("master_base_url")
         val masterKey = if (hasMasterConfig) (prefs.getString("master_api_key", "") ?: "").let {
             if (it.isBlank()) BuildConfig.MINIMAX_API_KEY else it
@@ -294,7 +294,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             AutoGLMShizukuService.voiceCommandFlow.collect { command ->
                 Log.d("ChatViewModel", "Received voice command from Shizuku (wake-up): $command")
-                sendMessage(command, isVoiceInput = true, startNewConversation = true)
+            val appContext = getApplication<Application>()
+            val shizukuOk = ShizukuHelper.isShizukuFullyReady(appContext)
+            val overlayOk = Settings.canDrawOverlays(appContext)
+            val imeOk = isImeEnabled(appContext)
+            _uiState.value = _uiState.value.copy(
+                shizukuConnected = shizukuOk,
+                missingOverlayPermission = !overlayOk,
+                imeEnabled = imeOk
+            )
+            if (!shizukuOk || !overlayOk || !imeOk) {
+                _uiState.value = _uiState.value.copy(
+                    error = getApplication<Application>().getString(R.string.error_required_permissions_missing)
+                )
+                return@collect
+            }
+            sendMessage(command, isVoiceInput = true, startNewConversation = true)
             }
         }
 
@@ -416,7 +431,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         prefs.edit().apply {
-            putString("master_api_key", if (masterApiKey == BuildConfig.MINIMAX_API_KEY) "" else masterApiKey)
+            putString("master_api_key", if (masterApiKey == BuildConfig.MINIMAX_API_KEY || masterApiKey == BuildConfig.DEFAULT_API_KEY) "" else masterApiKey)
             putString("master_base_url", finalMasterBaseUrl)
             putBoolean("master_is_gemini", masterIsGemini)
             putString("master_model_name", finalMasterModelName)
@@ -499,19 +514,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun checkBatteryOptimization(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-            val packageName = context.packageName
-            val isIgnoring = powerManager.isIgnoringBatteryOptimizations(packageName)
-            _uiState.value = _uiState.value.copy(missingBatteryExemption = !isIgnoring)
-        } else {
-            _uiState.value = _uiState.value.copy(missingBatteryExemption = false)
-        }
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        val packageName = context.packageName
+        val isIgnoring = powerManager.isIgnoringBatteryOptimizations(packageName)
+        _uiState.value = _uiState.value.copy(missingBatteryExemption = !isIgnoring)
     }
 
     fun checkShizukuConnection(context: Context) {
-        val isShizukuConnected = ShizukuHelper.isShizukuAvailable() && ShizukuHelper.checkPermission(context)
+        val isShizukuConnected = ShizukuHelper.isShizukuFullyReady(context)
         _uiState.value = _uiState.value.copy(shizukuConnected = isShizukuConnected)
+    }
+
+    fun checkImeEnabled(context: Context) {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+        val enabled = imm?.enabledInputMethodList?.any { it.packageName == context.packageName } == true
+        _uiState.value = _uiState.value.copy(imeEnabled = enabled)
+    }
+
+    private fun isImeEnabled(context: Context): Boolean {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+        return imm?.enabledInputMethodList?.any { it.packageName == context.packageName } == true
     }
 
     fun clearError() {

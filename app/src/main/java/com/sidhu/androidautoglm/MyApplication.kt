@@ -5,6 +5,7 @@ import com.sidhu.androidautoglm.action.AppMapper
 import com.sidhu.androidautoglm.action.AppMatcher
 import com.sidhu.androidautoglm.memory.MemoryManager
 import com.sidhu.androidautoglm.utils.SherpaModelManager
+import com.sidhu.androidautoglm.utils.ShizukuHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -15,6 +16,12 @@ class MyApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // 尽早初始化 Shizuku，确保 Service 启动前 binder 监听已注册
+        ShizukuHelper.init(this)
+        appScope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(2500)
+            ShizukuHelper.checkBinderOnStartup(this@MyApplication)
+        }
         AppMapper.init(this)
         AppMatcher.init(AppMapper)
         MemoryManager(this).init()

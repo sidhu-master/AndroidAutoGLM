@@ -6,10 +6,12 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.provider.Settings
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
-import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
@@ -68,11 +70,7 @@ class AutoGLMShizukuService : Service(), IGLMService {
          */
         fun startService(context: Context) {
             val intent = Intent(context, AutoGLMShizukuService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            context.startForegroundService(intent)
         }
 
         /**
@@ -112,8 +110,12 @@ class AutoGLMShizukuService : Service(), IGLMService {
         // 创建通知渠道
         createNotificationChannel()
 
-        // 启动前台服务
-        startForeground(NOTIFICATION_ID, createNotification())
+        // 启动前台服务（Android 14+ 需显式传入服务类型）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, createNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(NOTIFICATION_ID, createNotification())
+        }
 
         // 初始化
         initialize()
@@ -174,12 +176,14 @@ class AutoGLMShizukuService : Service(), IGLMService {
     private fun setupKeepAliveWindow() {
         try {
             if (keepAliveView != null) return
+            if (!Settings.canDrawOverlays(this)) {
+                Log.w(TAG, "Skip keep-alive window: overlay permission not granted")
+                return
+            }
             val wm = getSystemService(WINDOW_SERVICE) as WindowManager
             val params = WindowManager.LayoutParams(
                 1, 1,
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                else WindowManager.LayoutParams.TYPE_PHONE,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                         WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
@@ -291,6 +295,16 @@ class AutoGLMShizukuService : Service(), IGLMService {
         serviceScope.launch(Dispatchers.IO) {
             while (true) {
                 try {
+                    val available = ShizukuHelper.isShizukuAvailable()
+                    if (!available) {
+                        kotlinx.coroutines.delay(1000)
+                        continue
+                    }
+                    // 额外等待：确保 Shizuku binder 已完全就绪，避免 "binder haven't been received" 竞态
+                    if (!ShizukuHelper.isShizukuReady()) {
+                        kotlinx.coroutines.delay(500)
+                        continue
+                    }
                     // mFocusedApp 直接表示当前聚焦的应用，不受 task stack 排序影响
                     // 格式: mFocusedApp=ActivityRecord{hash u0 com.xxx.yyy/.Activity t123}
                     val (success, output) = ShizukuHelper.executeShellCommandWithOutput(
@@ -335,18 +349,16 @@ class AutoGLMShizukuService : Service(), IGLMService {
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "AutoGLM Shizuku Service",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "AutoGLM Shizuku mode service running"
-                setShowBadge(false)
-            }
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            notificationManager.createNotificationChannel(channel)
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "AutoGLM Shizuku Service",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "AutoGLM Shizuku mode service running"
+            setShowBadge(false)
         }
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        notificationManager.createNotificationChannel(channel)
     }
 
     private fun createNotification(): Notification {
@@ -361,7 +373,7 @@ class AutoGLMShizukuService : Service(), IGLMService {
 
     // ========== IGLMService 实现 ==========
 
-    override fun isAvailable(): Boolean = isInitialized && ShizukuHelper.isShizukuAvailable() && ShizukuHelper.checkPermission(this)
+    override fun isAvailable(): Boolean = isInitialized && ShizukuHelper.isShizukuAvailable() && ShizukuHelper.checkPermission()
 
     override suspend fun performTap(x: Float, y: Float): Boolean {
         _animationController?.showTapAnimation(x, y, 300)
@@ -428,19 +440,23 @@ class AutoGLMShizukuService : Service(), IGLMService {
      * 需在设置中启用「AutoGLM 输入」键盘。
      */
     override suspend fun performDirectTextInput(text: String): Boolean {
-        if (text.isEmpty()) return false
+        Log.d(TAG, "performDirectTextInput: ENTRY text=\"$text\" len=${text.length}")
+        if (text.isEmpty()) {
+            Log.w(TAG, "performDirectTextInput: empty text, return false")
+            return false
+        }
         return try {
-            // 从系统获取本应用 IME 的实际 ID（ime 命令对 ID 格式敏感，需用系统返回的格式）
             val imeId = resolveOurImeId()
             Log.d(TAG, "performDirectTextInput: imeId=$imeId")
 
-            val (_, imeOut) = ShizukuHelper.executeShellCommandWithOutput(
+            val (getOk, imeOut) = ShizukuHelper.executeShellCommandWithOutput(
                 "settings get secure default_input_method"
             )
+            Log.d(TAG, "performDirectTextInput: settings get default_input_method -> success=$getOk, output=\"$imeOut\"")
             val currentIme = imeOut.trim()
             val isOurIme = currentIme.contains("adbkeyboard", ignoreCase = true) ||
                 currentIme.contains("androidautoglm", ignoreCase = true)
-            Log.d(TAG, "performDirectTextInput: currentIme=$currentIme, isOurIme=$isOurIme")
+            Log.d(TAG, "performDirectTextInput: currentIme=\"$currentIme\", isOurIme=$isOurIme")
 
             var switched = false
             if (!isOurIme) {
@@ -452,30 +468,30 @@ class AutoGLMShizukuService : Service(), IGLMService {
                     Log.e(TAG, "performDirectTextInput: 无法切换 IME。请到 设置→系统→语言和输入→屏幕键盘→管理屏幕键盘 中勾选「AutoGLM 输入」")
                     return@performDirectTextInput false
                 }
-                // IME 切换后需等待 InputConnection 建立（微信等 app 可能较慢）
                 delay(600)
             }
 
-            // 使用 -p 指定包名，确保广播送达本应用；重试一次以应对 InputConnection 建立较慢
             val broadcastPrefix = "am broadcast -p $packageName"
             val escapedMsg = text.replace("\\", "\\\\").replace("\"", "\\\"")
+            Log.d(TAG, "performDirectTextInput: broadcastPrefix=$broadcastPrefix, escapedMsg=\"$escapedMsg\"")
             repeat(2) { attempt ->
-                ShizukuHelper.executeShellCommand("$broadcastPrefix -a ADB_CLEAR_TEXT")
+                val clearOk = ShizukuHelper.executeShellCommand("$broadcastPrefix -a ADB_CLEAR_TEXT")
+                Log.d(TAG, "performDirectTextInput: ADB_CLEAR_TEXT attempt=${attempt + 1} -> $clearOk")
                 delay(120)
-                ShizukuHelper.executeShellCommandWithOutput(
+                val (inputOk, inputOut) = ShizukuHelper.executeShellCommandWithOutput(
                     "$broadcastPrefix -a ADB_INPUT_TEXT --es msg \"$escapedMsg\""
                 )
-                Log.d(TAG, "performDirectTextInput: broadcast attempt=${attempt + 1}")
+                Log.d(TAG, "performDirectTextInput: ADB_INPUT_TEXT attempt=${attempt + 1} -> success=$inputOk, output=\"$inputOut\"")
                 if (attempt == 0) delay(400)
             }
-            val ok = true
             delay(200)
 
             if (switched && currentIme.isNotBlank() && !currentIme.contains("androidautoglm", ignoreCase = true)) {
-                ShizukuHelper.executeShellCommand("ime set $currentIme")
-                Log.d(TAG, "performDirectTextInput: restored IME to $currentIme")
+                val restoreOk = ShizukuHelper.executeShellCommand("ime set $currentIme")
+                Log.d(TAG, "performDirectTextInput: restored IME to $currentIme -> $restoreOk")
             }
-            ok
+            Log.d(TAG, "performDirectTextInput: DONE success=true")
+            true
         } catch (e: Exception) {
             Log.e(TAG, "performDirectTextInput failed: ${e.message}", e)
             false

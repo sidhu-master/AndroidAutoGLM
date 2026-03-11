@@ -6,7 +6,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -19,8 +22,20 @@
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
     <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 与 Shizuku 一致：可编程启用无线调试，需 adb shell pm grant 授予 -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+
+    <permission
+        android:name="com.sidhu.androidautoglm.permission.SHIZUKU_API"
+        android:protectionLevel="dangerous" />
+    <uses-permission android:name="com.sidhu.androidautoglm.permission.SHIZUKU_API" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
 
     <queries>
         <intent>
@@ -57,11 +72,22 @@
             </intent-filter>
         </activity>
 
-        <!-- Shizuku 模式前台服务 -->
+        <activity
+            android:name=".ui.ShizukuBlackWindowActivity"
+            android:exported="false"
+            android:theme="@style/Theme.ShizukuBlackWindow" />
+
+        <!-- Shizuku 模式前台服务：主功能为截图/动作/悬浮窗，唤醒词为可选；使用 dataSync 避免未授权 RECORD_AUDIO 时启动失败 -->
         <service
             android:name=".AutoGLMShizukuService"
             android:exported="false"
-            android:foregroundServiceType="microphone" />
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Shizuku 配对前台服务：后台搜索配对服务，通过通知输入配对码 -->
+        <service
+            android:name=".ShizukuPairingService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

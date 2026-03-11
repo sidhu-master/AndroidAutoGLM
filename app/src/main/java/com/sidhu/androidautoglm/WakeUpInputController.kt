@@ -419,19 +419,14 @@ class WakeUpInputController(private val context: Context) : LifecycleOwner, View
         windowParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) 
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY 
-            else WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or 
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, 
             PixelFormat.TRANSLUCENT
         )
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            windowParams.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-        }
+        windowParams.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         
         windowParams.gravity = Gravity.TOP or Gravity.START
         windowParams.x = 0

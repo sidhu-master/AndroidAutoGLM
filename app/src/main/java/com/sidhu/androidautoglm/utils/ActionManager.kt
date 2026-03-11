@@ -2,7 +2,6 @@ package com.sidhu.androidautoglm.utils
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -56,7 +55,7 @@ object ActionManager {
      * 检查是否可以使用 Shizuku
      */
     private fun canUseShizuku(): Boolean {
-        return ShizukuHelper.isShizukuAvailable() && ShizukuHelper.checkPermission(context)
+        return ShizukuHelper.isShizukuRunning()
     }
 
     /**
@@ -319,11 +318,7 @@ object ActionManager {
      */
     fun hasOverlayPermission(): Boolean {
         return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                Settings.canDrawOverlays(context)
-            } else {
-                true
-            }
+            Settings.canDrawOverlays(context)
         } catch (e: Exception) {
             false
         }

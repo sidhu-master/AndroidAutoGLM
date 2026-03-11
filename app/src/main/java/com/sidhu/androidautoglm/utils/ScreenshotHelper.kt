@@ -22,25 +22,24 @@ object ScreenshotHelper {
     /**
      * 准备截屏环境（Shizuku 检查、权限、反射），不隐藏悬浮窗。
      * 返回 null 表示不可用，调用方无需再隐藏。
+     * 使用 ShizukuHelper 统一检查，避免 "binder haven't been received" 竞态。
      */
     fun prepareScreencap(): PreparedScreencap? {
+        if (!ShizukuHelper.isShizukuAvailable()) {
+            Log.w(TAG, "[Screenshot] Shizuku not available")
+            return null
+        }
+        if (!ShizukuHelper.isShizukuReady()) {
+            Log.w(TAG, "[Screenshot] Shizuku not ready (binder or permission)")
+            return null
+        }
+        val binder = runCatching { rikka.shizuku.Shizuku.getBinder() }.getOrNull()
+        if (binder == null || !binder.pingBinder()) {
+            ShizukuHelper.binderUnavailable()
+            return null
+        }
         return try {
             val shizukuClass = Class.forName("rikka.shizuku.Shizuku")
-            val pingBinderMethod = shizukuClass.getMethod("pingBinder")
-            try {
-                pingBinderMethod.invoke(null)
-            } catch (e: Exception) {
-                Log.w(TAG, "[Screenshot] Shizuku not available: ${e.message}")
-                return null
-            }
-            val checkPermissionMethod = shizukuClass.getMethod("checkSelfPermission")
-            val permissionResult = checkPermissionMethod.invoke(null) as Int
-            val packageManagerClass = Class.forName("android.content.pm.PackageManager")
-            val permissionGranted = packageManagerClass.getField("PERMISSION_GRANTED").getInt(null)
-            if (permissionResult != permissionGranted) {
-                Log.w(TAG, "[Screenshot] Shizuku permission not granted")
-                return null
-            }
             val newProcessMethod = shizukuClass.getDeclaredMethod(
                 "newProcess",
                 Array<String>::class.java,
@@ -61,6 +60,10 @@ object ScreenshotHelper {
      */
     suspend fun executeScreencap(prepared: PreparedScreencap): ByteArray? = withContext(Dispatchers.IO) {
         try {
+            if (!ShizukuHelper.isShizukuAvailable()) {
+                Log.w(TAG, "[Screenshot] Shizuku unavailable at execute time")
+                return@withContext null
+            }
             val cmd = "screencap -p"
             Log.d(TAG, "[Screenshot] Running: $cmd")
             val process = prepared.newProcessMethod.invoke(
@@ -96,7 +99,13 @@ object ScreenshotHelper {
             Log.d(TAG, "[Screenshot] Raw capture: ${data.size} bytes")
             data
         } catch (e: Exception) {
-            Log.e(TAG, "[Screenshot] Execute error: ${e.message}", e)
+            val cause = (e as? java.lang.reflect.InvocationTargetException)?.cause ?: e
+            if (cause is IllegalStateException && cause.message?.contains("binder") == true) {
+                ShizukuHelper.binderUnavailable()
+                Log.w(TAG, "[Screenshot] Shizuku binder lost: ${cause.message}")
+            } else {
+                Log.e(TAG, "[Screenshot] Execute error: ${e.message}", e)
+            }
             null
         }
     }

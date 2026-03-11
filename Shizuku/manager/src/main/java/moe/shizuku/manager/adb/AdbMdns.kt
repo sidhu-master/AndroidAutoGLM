@@ -57,17 +57,26 @@ class AdbMdns(
     }
 
     private fun onServiceResolved(resolvedService: NsdServiceInfo) {
-        if (running && NetworkInterface.getNetworkInterfaces()
+        Log.i(TAG, "onServiceResolved: $resolvedService")
+        if (running && (NetworkInterface.getNetworkInterfaces()
                 .asSequence()
                 .any { networkInterface ->
                     networkInterface.inetAddresses
                         .asSequence()
                         .any { resolvedService.host.hostAddress == it.hostAddress }
-                }
+                } || resolvedService.host.hostAddress == "127.0.0.1" || resolvedService.host.hostAddress == "::1")
             && isPortAvailable(resolvedService.port)
         ) {
             serviceName = resolvedService.serviceName
             observer.onChanged(resolvedService.port)
+        } else {
+            Log.w(TAG, "Service resolved but rejected or port not in use. Host: ${resolvedService.host.hostAddress}, Port: ${resolvedService.port}")
+            // Fallback: if port is available (in use), trust it even if IP check failed (common in some environments)
+            if (running && isPortAvailable(resolvedService.port)) {
+                Log.w(TAG, "Fallback: IP check failed but port is in use, accepting.")
+                serviceName = resolvedService.serviceName
+                observer.onChanged(resolvedService.port)
+            }
         }
     }
 

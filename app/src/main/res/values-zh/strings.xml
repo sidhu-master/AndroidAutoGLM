@@ -2,10 +2,10 @@
     <string name="app_name">AndroidAutoGLM</string>
     <string name="ime_label">AutoGLM 输入</string>
     <string name="ime_enable_title">内置输入法</string>
-    <string name="ime_enable_desc">用于自动化输入文字，支持清空已有内容。只需在「屏幕键盘」中勾选启用即可，无需设为默认；执行输入时会自动切换，完成后恢复原键盘。</string>
+    <string name="ime_enable_desc">用于自动化输入文字</string>
     <string name="ime_enable_btn">启用</string>
     <string name="ime_enable_success">已启用，请到键盘设置中勾选「AutoGLM 输入」</string>
-    <string name="ime_enable_fail_shizuku">需要 Shizuku 授权才能启用，请先启动 Shizuku 模式</string>
+    <string name="ime_enable_fail_shizuku">请先在设置界面开启shizuku adb连接</string>
     <string name="accessibility_service_description">AutoGLM AI 代理服务，用于自动化手机操作。</string>
 
     <!-- ChatScreen -->
@@ -13,11 +13,59 @@
     <string name="input_placeholder">输入你的指令...</string>
     <string name="send_button">发送</string>
     <string name="accessibility_required">需要开启无障碍服务</string>
-    <string name="shizuku_permission_required">需要Shizuku授权</string>
+    <string name="shizuku_permission_required">请先在设置中完成必须授权</string>
     <string name="shizuku_permission_granted_toast">Shizuku 授权成功</string>
     <string name="shizuku_permission_denied_toast">Shizuku 授权被拒绝</string>
-    <string name="shizuku_open_app_toast">请先启动 Shizuku 并在授权列表中为本应用授权</string>
+    <string name="shizuku_open_app_toast">未检测到 Shizuku 管理器，无法弹出授权窗口</string>
+    <string name="error_required_permissions_missing">必须授权未完成，无法执行指令</string>
+
+    <!-- Shizuku 设置界面 -->
+    <string name="shizuku_settings_title">Shizuku</string>
+    <string name="shizuku_settings_entry">Shizuku</string>
+    <string name="shizuku_status_label">状态</string>
+    <string name="shizuku_status_running">运行中</string>
+    <string name="shizuku_status_stopped">未运行</string>
+    <string name="shizuku_status_connecting">连接中</string>
+    <string name="shizuku_status_failed">连接失败</string>
+    <string name="shizuku_wireless_desc">AI自动化必选，用于adb命令</string>
+    <string name="shizuku_wireless_desc_toggle">网络变化时无线调试可能被禁用。若一直搜索不到，请尝试关闭再重新开启「无线调试」。</string>
+    <string name="shizuku_open_developer_options">打开开发者选项</string>
+    <string name="shizuku_restart_pairing_service">重启配对服务</string>
+        <string name="shizuku_searching">正在搜索无线调试服务…</string>
+    <string name="shizuku_enable_wireless_first">请先在开发者选项中启用无线调试。</string>
+    <string name="shizuku_port_found">已发现端口：%d</string>
+    <string name="shizuku_start_btn">启动 Shizuku</string>
+    <string name="shizuku_started">已启动</string>
+    <string name="shizuku_start_success">Shizuku 已启动。</string>
+    <string name="shizuku_open_manager">打开 Shizuku</string>
+    <string name="shizuku_manual_port_hint">或手动输入「开发者选项」→「无线调试」中显示的端口号。</string>
+    <string name="shizuku_port_label">端口</string>
+    <string name="shizuku_refresh_port">刷新端口</string>
+    <string name="shizuku_invalid_port">请输入有效端口（1–65535）</string>
+    <string name="shizuku_requires_android11">无线调试需要 Android 11 或更高版本。</string>
+
+    <!-- 配对 -->
+    <string name="shizuku_pair_btn">配对设备</string>
+    <string name="shizuku_pair_desc">首次使用：在「开发者选项」→「无线调试」中获取六位配对码并输入在顶部弹窗。</string>
+    <string name="shizuku_pairing_title">输入配对码</string>
+    <string name="shizuku_pairing_searching">正在搜索配对服务</string>
+    <string name="shizuku_pairing_message">请前往「开发者选项」→「无线调试」→「使用配对码配对设备」，将设备上显示的六位配对码输入下方。</string>
+    <string name="shizuku_pairing_code_label">配对码</string>
+    <string name="shizuku_pairing_code_invalid">请输入 6 位数字</string>
+    <string name="shizuku_pairing_code_wrong">配对码错误。</string>
+    <string name="shizuku_pair_success">配对成功，现在可以启动 Shizuku。</string>
+    <string name="shizuku_already_paired">已配对</string>
+    <string name="shizuku_pair_failed">配对失败</string>
+    <string name="shizuku_cannot_connect">无法连接至无线调试服务。</string>
+    <string name="notification_channel_shizuku_pairing">Shizuku 配对</string>
+    <string name="shizuku_pairing_stop">停止</string>
+    <string name="shizuku_pairing_found_title">已发现配对服务</string>
+    <string name="shizuku_pairing_found_desc">点击输入六位配对码</string>
+    <string name="shizuku_pairing_input_action">输入配对码</string>
+    <string name="shizuku_pairing_working">正在配对…</string>
+    <string name="shizuku_pairing_started_toast">已开始配对。请前往「无线调试」→「使用配对码配对设备」，然后点击通知输入配对码。</string>
     <string name="shizuku_request_failed_toast">请求 Shizuku 授权失败</string>
+    <string name="shizuku_nearby_permission_required">需要授予“附近设备”权限才能发现无线调试服务</string>
     <string name="tap_to_enable">点击开启</string>
     <string name="overlay_error">需要悬浮窗权限以显示操作状态</string>
     <string name="grant_action">去授权</string>
@@ -88,11 +136,11 @@
     <!-- ChatViewModel Status & Errors -->
     <string name="status_stopped">已停止</string>
     <string name="error_api_key_missing">请先设置 API Key</string>
-    <string name="error_service_not_connected">服务未连接。请尝试在设置中关闭并重新开启无障碍服务。</string>
+    <string name="error_service_not_connected">必须授权未完成，无法执行指令</string>
     <string name="error_shizuku_needs_accessibility">Shizuku模式仍需开启无障碍服务才能执行操作</string>
     <string name="status_thinking">思考中...</string>
     <string name="status_paused">已暂停，请手动操作后点击继续</string>
-    <string name="status_reviewing_task">审查任务中...</string>
+    <string name="status_reviewing_task">任务规划中</string>
     <string name="status_screenshot_taking">进行界面截图</string>
     <string name="error_screenshot_failed">截图失败</string>
     <string name="error_last_action_failed">上一个动作执行失败。</string>
@@ -154,10 +202,14 @@
     <string name="voice_cancel">取消</string>
     <string name="text_copied">文本已复制</string>
     <string name="confirm">确定</string>
+    <string name="required_permissions_title">必须授权</string>
+    <string name="required_permissions_desc">以上权限需完整授权才能正常使用</string>
+    <string name="overlay_permission_title">悬浮窗权限</string>
+    <string name="overlay_permission_desc">用于在其他应用上方显示运行状态</string>
 
     <!-- Battery Optimization Settings -->
     <string name="battery_optimization_title">应用保活</string>
-    <string name="battery_optimization_desc">关闭电池优化，使应用在后台运行</string>
+    <string name="battery_optimization_desc">开启以支持语音唤醒，使应用在后台运行，会增加耗电</string>
     <string name="battery_optimization_desc_on">已关闭 (服务可在后台保活)</string>
     <string name="battery_optimization_desc_off">开启 (系统可能会杀掉服务)</string>
     <string name="battery_optimization_allow">允许后台运行</string>
@@ -305,7 +357,7 @@
 
     <!-- TextInputHandler -->
     <string name="error_visual_input_failed">未输入正确的文本</string>
-    <string name="error_shizuku_no_text_input">Shizuku模式下无法输入文本，请切换到无障碍模式</string>
+    <string name="error_shizuku_no_text_input">必须授权未完成，暂不可输入</string>
 
     <!-- ConversationRepository -->
     <string name="default_conversation_title">新对话</string>

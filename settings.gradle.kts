@@ -10,8 +10,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven { url = uri("https://raw.githubusercontent.com/sidhu-master/AutoInput-Repo/main") }
-        // maven { url = uri("../maven_repo") }
+        mavenLocal()
         maven { url = uri("https://jitpack.io") }
     }
 }
@@ -19,13 +18,12 @@ dependencyResolutionManagement {
 rootProject.name = "AndroidAutoGLM"
 include(":app")
 
-// Shizuku 源码位于 Shizuku/，用于内置无线调试启动。详见 Shizuku/README_EMBED.md
-// 构建: cd Shizuku && ./gradlew :manager:assembleDebug
-
-// 使用 composite build 引入 AutoInput
-includeBuild("../AutoInput") {
+// Shizuku 内置：shizuku-starter 需先发布到 mavenLocal
+// 修改 shizuku-starter 后运行: cd Shizuku && ./gradlew :shizuku-starter:publishToMavenLocal
+includeBuild("Shizuku") {
     dependencySubstitution {
-        substitute(module("com.sidhu:autoinput")).using(project(":"))
+        substitute(module("com.sidhu.androidautoglm:shizuku-starter")).using(project(":shizuku-starter"))
+        substitute(module("moe.shizuku:server")).using(project(":server"))
     }
 }
 

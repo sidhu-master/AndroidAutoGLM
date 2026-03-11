@@ -217,6 +217,10 @@ public class ShizukuService extends Service<ShizukuUserServiceManager, ShizukuCl
                 return;
             }
         }
+        if (isManager) {
+            clientRecord = clientManager.findClient(callingUid, callingPid);
+            if (clientRecord != null) clientRecord.allowed = true;
+        }
 
         LOGGER.d("attachApplication: %s %d %d", requestPackageName, callingUid, callingPid);
 
@@ -238,6 +242,9 @@ public class ShizukuService extends Service<ShizukuUserServiceManager, ShizukuCl
             reply.putBoolean(BIND_APPLICATION_PERMISSION_GRANTED, Objects.requireNonNull(clientRecord).allowed);
             reply.putBoolean(BIND_APPLICATION_SHOULD_SHOW_REQUEST_PERMISSION_RATIONALE, false);
         } else {
+            // 本应用即 Manager，直接授权，无需授权列表
+            reply.putBoolean(BIND_APPLICATION_PERMISSION_GRANTED, true);
+            reply.putBoolean(BIND_APPLICATION_SHOULD_SHOW_REQUEST_PERMISSION_RATIONALE, false);
             try {
                 PermissionManagerApis.grantRuntimePermission(MANAGER_APPLICATION_ID,
                         WRITE_SECURE_SETTINGS, UserHandleCompat.getUserId(callingUid));
@@ -254,6 +261,32 @@ public class ShizukuService extends Service<ShizukuUserServiceManager, ShizukuCl
 
     @Override
     public void showPermissionConfirmation(int requestCode, @NonNull ClientRecord clientRecord, int callingUid, int callingPid, int userId) {
+        if (MANAGER_APPLICATION_ID.equals(clientRecord.packageName)) {
+            List<ClientRecord> records = clientManager.findClients(callingUid);
+            List<String> packages = new ArrayList<>();
+            for (ClientRecord record : records) {
+                packages.add(record.packageName);
+                record.allowed = true;
+                if (record.pid == callingPid) {
+                    record.dispatchRequestPermissionResult(requestCode, true);
+                }
+            }
+
+            for (String packageName : PackageManagerApis.getPackagesForUidNoThrow(callingUid)) {
+                PackageInfo pi = PackageManagerApis.getPackageInfoNoThrow(packageName, PackageManager.GET_PERMISSIONS, userId);
+                if (pi == null || pi.requestedPermissions == null || !ArraysKt.contains(pi.requestedPermissions, PERMISSION)) {
+                    continue;
+                }
+                try {
+                    PermissionManagerApis.grantRuntimePermission(packageName, PERMISSION, userId);
+                } catch (RemoteException e) {
+                    LOGGER.w(e, "grantRuntimePermission");
+                }
+            }
+
+            configManager.update(callingUid, packages, ConfigManager.MASK_PERMISSION, ConfigManager.FLAG_ALLOWED);
+            return;
+        }
         ApplicationInfo ai = PackageManagerApis.getApplicationInfoNoThrow(clientRecord.packageName, 0, userId);
         if (ai == null) {
             return;

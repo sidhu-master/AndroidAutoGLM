@@ -4,12 +4,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
 import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.inputmethod.InputConnection
 import android.inputmethodservice.InputMethodService
+import androidx.core.content.ContextCompat
 
 /**
  * 内置 ADBKeyboard 功能：通过广播接收文本/按键并输入到当前焦点输入框。
@@ -41,6 +41,7 @@ class AdbIME : InputMethodService() {
         if (receiver != null) return
         receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
+                Log.d(TAG, "AdbIME: onReceive action=${intent?.action}")
                 if (intent == null) return
                 handleBroadcast(intent)
             }
@@ -51,12 +52,8 @@ class AdbIME : InputMethodService() {
             addAction(ADB_INPUT_CODE)
             addAction(ADB_CLEAR_TEXT)
         }
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            @Suppress("DEPRECATION")
-            registerReceiver(receiver, filter)
-        }
+        // 必须 RECEIVER_EXPORTED：am broadcast 由 shell 进程发送，RECEIVER_NOT_EXPORTED 会过滤掉
+        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
         Log.d(TAG, "AdbIME: BroadcastReceiver registered")
     }
 
@@ -72,6 +69,7 @@ class AdbIME : InputMethodService() {
     }
 
     private fun handleBroadcast(intent: Intent) {
+        Log.d(TAG, "AdbIME: handleBroadcast action=${intent.action}")
         val ic = currentInputConnection ?: run {
             Log.w(TAG, "AdbIME: no InputConnection (IME 可能尚未连接输入框)，ignore action=${intent.action}")
             return
@@ -79,9 +77,12 @@ class AdbIME : InputMethodService() {
         when (intent.action) {
             ADB_INPUT_TEXT -> {
                 val msg = intent.getStringExtra("msg")
+                Log.d(TAG, "AdbIME: ADB_INPUT_TEXT msg=${if (msg != null) "\"$msg\" len=${msg.length}" else "null"}")
                 if (!msg.isNullOrEmpty()) {
                     ic.commitText(msg, 1)
-                    Log.d(TAG, "AdbIME: committed text, len=${msg.length}")
+                    Log.d(TAG, "AdbIME: committed text ok, len=${msg.length}")
+                } else {
+                    Log.w(TAG, "AdbIME: ADB_INPUT_TEXT msg empty, skip commit")
                 }
             }
             ADB_INPUT_B64 -> {
@@ -112,6 +113,7 @@ class AdbIME : InputMethodService() {
                 }
             }
             ADB_CLEAR_TEXT -> {
+                Log.d(TAG, "AdbIME: ADB_CLEAR_TEXT received")
                 clearInput(ic)
             }
         }
@@ -121,9 +123,12 @@ class AdbIME : InputMethodService() {
     private fun clearInput(ic: InputConnection) {
         val beforeLen = ic.getTextBeforeCursor(10000, 0)?.length ?: 0
         val afterLen = ic.getTextAfterCursor(10000, 0)?.length ?: 0
+        Log.d(TAG, "AdbIME: clearInput before=$beforeLen after=$afterLen")
         if (beforeLen > 0 || afterLen > 0) {
             ic.deleteSurroundingText(beforeLen, afterLen)
-            Log.d(TAG, "AdbIME: cleared input, before=$beforeLen after=$afterLen")
+            Log.d(TAG, "AdbIME: cleared input ok")
+        } else {
+            Log.d(TAG, "AdbIME: clearInput nothing to clear")
         }
     }
 

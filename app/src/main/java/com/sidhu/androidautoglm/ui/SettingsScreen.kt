@@ -21,20 +21,20 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.foundation.clickable
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.sidhu.androidautoglm.BuildConfig
 import com.sidhu.androidautoglm.utils.ShizukuHelper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.Color
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
-import android.widget.Toast
+import android.util.Log
 import com.sidhu.androidautoglm.network.UpdateInfo
 import com.sidhu.androidautoglm.R
 
@@ -69,7 +69,8 @@ fun SettingsScreen(
     subBaseUrl: String = "https://open.bigmodel.cn/api/paas/v4",
     subIsGemini: Boolean = false,
     subModelName: String = "autoglm-phone",
-    onSaveFull: ((String, String, Boolean, String, Boolean, String, String, Boolean, String) -> Unit)? = null
+    onSaveFull: ((String, String, Boolean, String, Boolean, String, String, Boolean, String) -> Unit)? = null,
+    onOpenShizukuSettings: () -> Unit = {}
 ) {
     val isDefaultKey = apiKey == BuildConfig.DEFAULT_API_KEY && BuildConfig.DEFAULT_API_KEY.isNotEmpty()
 
@@ -89,10 +90,27 @@ fun SettingsScreen(
     var newSubModelName by remember { mutableStateOf(subModelName) }
     
     val keyboardController = LocalSoftwareKeyboardController.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     
 
     // Update Logic
     val context = LocalContext.current
+    var isShizukuRunning by remember { mutableStateOf(ShizukuHelper.isShizukuFullyReady(context)) }
+    var isImeEnabled by remember { mutableStateOf(isImeEnabled(context)) }
+    var isOverlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                isShizukuRunning = ShizukuHelper.isShizukuProcessRunning(context)
+                Log.d("ShizukuToggle", "isShizikuRunning=$isShizukuRunning")
+                isImeEnabled = isImeEnabled(context)
+                isOverlayGranted = Settings.canDrawOverlays(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     
     Scaffold(
         topBar = {
@@ -192,6 +210,129 @@ fun SettingsScreen(
                     }
                 }
 
+                Text(
+                    text = stringResource(R.string.required_permissions_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpenShizukuSettings() },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.shizuku_settings_entry),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = stringResource(R.string.shizuku_wireless_desc),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = isShizukuRunning,
+                                onCheckedChange = { onOpenShizukuSettings() }
+                            )
+                        }
+                    }
+                }
+
+                // 内置输入法 Card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.ime_enable_title),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = stringResource(R.string.ime_enable_desc),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = isImeEnabled,
+                                onCheckedChange = { context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
+                            )
+                        }
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val intent = Intent(
+                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                    intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    context.startActivity(intent)
+                                },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.overlay_permission_title),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = stringResource(R.string.overlay_permission_desc),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = isOverlayGranted,
+                                onCheckedChange = {
+                                    val intent = Intent(
+                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                    intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    context.startActivity(intent)
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Text(
+                    text = stringResource(R.string.required_permissions_desc),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
                 // Battery Optimization Card
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -269,71 +410,6 @@ fun SettingsScreen(
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
-                        }
-                    }
-                }
-
-                // 内置输入法 Card
-                val scope = rememberCoroutineScope()
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
-                                },
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = stringResource(R.string.ime_enable_title),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    text = stringResource(R.string.ime_enable_desc),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Icon(
-                                imageVector = Icons.Filled.OpenInNew,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Button(
-                            onClick = {
-                                if (!ShizukuHelper.isShizukuAvailable() || !ShizukuHelper.checkPermission(context)) {
-                                    Toast.makeText(context, R.string.ime_enable_fail_shizuku, Toast.LENGTH_LONG).show()
-                                    return@Button
-                                }
-                                scope.launch {
-                                    val imeId = "${BuildConfig.APPLICATION_ID}/com.sidhu.androidautoglm.input.AdbIME"
-                                    val ok = withContext(Dispatchers.IO) {
-                                        ShizukuHelper.executeShellCommand("ime enable $imeId")
-                                    }
-                                    withContext(Dispatchers.Main) {
-                                        Toast.makeText(
-                                            context,
-                                            if (ok) R.string.ime_enable_success else R.string.ime_enable_fail_shizuku,
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                        if (ok) {
-                                            context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
-                                        }
-                                    }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(stringResource(R.string.ime_enable_btn))
                         }
                     }
                 }
@@ -665,6 +741,11 @@ fun SettingsScreen(
 private fun getMaskedKey(key: String): String {
     if (key.length <= 8) return "******"
     return "${key.take(4)}...${key.takeLast(4)}"
+}
+
+private fun isImeEnabled(context: Context): Boolean {
+    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+    return imm?.enabledInputMethodList?.any { it.packageName == context.packageName } == true
 }
 
 @Preview(showBackground = true)

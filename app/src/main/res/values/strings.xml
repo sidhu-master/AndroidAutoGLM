@@ -2,10 +2,10 @@
     <string name="app_name">AndroidAutoGLM</string>
     <string name="ime_label">AutoGLM Input</string>
     <string name="ime_enable_title">Built-in Input</string>
-    <string name="ime_enable_desc">For automated text input with clear support. Just enable it in \"On-screen keyboard\"; no need to set as default. The app switches to it during Type and restores your keyboard after.</string>
+    <string name="ime_enable_desc">For automated text input</string>
     <string name="ime_enable_btn">Enable</string>
     <string name="ime_enable_success">Enabled. Go to keyboard settings and turn on \"AutoGLM Input\"</string>
-    <string name="ime_enable_fail_shizuku">Shizuku permission required. Start Shizuku mode first.</string>
+    <string name="ime_enable_fail_shizuku">Please enable Shizuku ADB connection in Settings</string>
     <string name="accessibility_service_description">AutoGLM AI Agent Service for automated phone control.</string>
     
     <!-- ChatScreen -->
@@ -13,11 +13,59 @@
     <string name="input_placeholder">Type your instruction...</string>
     <string name="send_button">Send</string>
     <string name="accessibility_required">Accessibility Required</string>
-    <string name="shizuku_permission_required">Shizuku Permission Required</string>
+    <string name="shizuku_permission_required">Please complete required permissions in Settings</string>
     <string name="shizuku_permission_granted_toast">Shizuku permission granted</string>
     <string name="shizuku_permission_denied_toast">Shizuku permission denied</string>
-    <string name="shizuku_open_app_toast">Please start Shizuku and grant permission to this app</string>
+    <string name="shizuku_open_app_toast">Shizuku Manager not detected, cannot show permission dialog</string>
+    <string name="error_required_permissions_missing">Required permissions are not completed</string>
+
+    <!-- Shizuku Settings Screen -->
+    <string name="shizuku_settings_title">Shizuku</string>
+    <string name="shizuku_settings_entry">Shizuku</string>
+    <string name="shizuku_status_label">Status</string>
+    <string name="shizuku_status_running">Running</string>
+    <string name="shizuku_status_stopped">Stopped</string>
+    <string name="shizuku_status_connecting">Connecting</string>
+    <string name="shizuku_status_failed">Connection failed</string>
+    <string name="shizuku_wireless_desc">AI automation required, used for adb commands.</string>
+    <string name="shizuku_wireless_desc_toggle">When network changes, Wireless debugging may be disabled. Try toggling it off and on if discovery fails.</string>
+    <string name="shizuku_open_developer_options">Open Developer Options</string>
+    <string name="shizuku_restart_pairing_service">Restart Pairing Service</string>
+        <string name="shizuku_searching">Searching for wireless debugging service…</string>
+    <string name="shizuku_enable_wireless_first">Please enable Wireless debugging in Developer options first.</string>
+    <string name="shizuku_port_found">Port found: %d</string>
+    <string name="shizuku_start_btn">Start Shizuku</string>
+    <string name="shizuku_started">Started</string>
+    <string name="shizuku_start_success">Shizuku started.</string>
+    <string name="shizuku_open_manager">Open Shizuku</string>
+    <string name="shizuku_manual_port_hint">Or enter the port shown in Developer options → Wireless debugging.</string>
+    <string name="shizuku_port_label">Port</string>
+    <string name="shizuku_refresh_port">Refresh port</string>
+    <string name="shizuku_invalid_port">Please enter a valid port (1–65535)</string>
+    <string name="shizuku_requires_android11">Wireless debugging requires Android 11 or above.</string>
+
+    <!-- Pairing -->
+    <string name="shizuku_pair_btn">Pair with device</string>
+    <string name="shizuku_pair_desc">First-time use: Get the 6-digit pairing code from Developer options → Wireless debugging and enter it in the popup.</string>
+    <string name="shizuku_pairing_title">Enter pairing code</string>
+    <string name="shizuku_pairing_searching">Searching for pairing service</string>
+    <string name="shizuku_pairing_message">Go to Developer options → Wireless debugging → Pair device with pairing code. Enter the 6-digit code shown on your device.</string>
+    <string name="shizuku_pairing_code_label">Pairing code</string>
+    <string name="shizuku_pairing_code_invalid">Please enter 6 digits</string>
+    <string name="shizuku_pairing_code_wrong">Pairing code is wrong.</string>
+    <string name="shizuku_pair_success">Pairing successful. You can now start Shizuku.</string>
+    <string name="shizuku_already_paired">Already paired</string>
+    <string name="shizuku_pair_failed">Pairing failed</string>
+    <string name="shizuku_cannot_connect">Cannot connect to wireless debugging service.</string>
+    <string name="notification_channel_shizuku_pairing">Shizuku pairing</string>
+    <string name="shizuku_pairing_stop">Stop</string>
+    <string name="shizuku_pairing_found_title">Pairing service found</string>
+    <string name="shizuku_pairing_found_desc">Tap to enter the 6-digit pairing code</string>
+    <string name="shizuku_pairing_input_action">Enter pairing code</string>
+    <string name="shizuku_pairing_working">Pairing in progress…</string>
+    <string name="shizuku_pairing_started_toast">Pairing started. Go to Wireless debugging → Pair device with pairing code, then tap the notification to enter the code.</string>
     <string name="shizuku_request_failed_toast">Failed to request Shizuku permission</string>
+    <string name="shizuku_nearby_permission_required">需要授予“附近设备”权限才能发现无线调试服务</string>
     <string name="tap_to_enable">Tap to enable</string>
     <string name="overlay_error">Required to show Floating Window over other apps</string>
     <string name="grant_action">Grant</string>
@@ -68,6 +116,8 @@
     <string name="back">Back</string>
     <string name="close">Close</string>
     <string name="language_label">Language</string>
+    <string name="language_english">English</string>
+    <string name="language_chinese">中文</string>
 
     <!-- Floating Window -->
     <string name="fw_ready">Ready</string>
@@ -86,7 +136,7 @@
     <!-- ChatViewModel Status & Errors -->
     <string name="status_stopped">Stopped</string>
     <string name="error_api_key_missing">Please set API Key first</string>
-    <string name="error_service_not_connected">Service not connected. Please try disabling and re-enabling Accessibility Service in Settings.</string>
+    <string name="error_service_not_connected">Required permissions are not completed</string>
     <string name="error_shizuku_needs_accessibility">Shizuku mode still requires Accessibility Service to execute actions</string>
     <string name="status_thinking">Thinking...</string>
     <string name="status_paused">Paused. Please complete manual operation and tap Resume to continue.</string>
@@ -152,6 +202,10 @@
     <string name="voice_cancel">Cancel</string>
     <string name="text_copied">Text copied</string>
     <string name="confirm">Confirm</string>
+    <string name="required_permissions_title">Required Permissions</string>
+    <string name="required_permissions_desc">Shizuku, built-in IME, and overlay must be granted</string>
+    <string name="overlay_permission_title">Overlay Permission</string>
+    <string name="overlay_permission_desc">Used to show status over other apps</string>
 
     <!-- Update -->
     <string name="update_available_title">New Version Available: %1$s</string>
@@ -303,7 +357,7 @@
 
     <!-- TextInputHandler -->
     <string name="error_visual_input_failed">Incorrect text entered</string>
-    <string name="error_shizuku_no_text_input">Shizuku mode cannot input text, please switch to Accessibility mode</string>
+    <string name="error_shizuku_no_text_input">Required permissions are not completed yet</string>
 
     <!-- ConversationRepository -->
     <string name="default_conversation_title">New Conversation</string>
