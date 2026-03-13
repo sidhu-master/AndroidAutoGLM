@@ -1,15 +1,76 @@
 <resources>
     <string name="app_name">AndroidAutoGLM</string>
+    <string name="ime_label">AutoGLM Input</string>
+    <string name="ime_enable_title">Built-in Input</string>
+    <string name="ime_enable_desc">For automated text input</string>
+    <string name="ime_enable_btn">Enable</string>
+    <string name="ime_enable_success">Enabled. Go to keyboard settings and turn on \"AutoGLM Input\"</string>
+    <string name="ime_enable_fail_shizuku">Please enable Shizuku ADB connection in Settings</string>
     <string name="accessibility_service_description">AutoGLM AI Agent Service for automated phone control.</string>
     
     <!-- ChatScreen -->
     <string name="chat_title">AndroidAutoGLM</string>
     <string name="input_placeholder">Type your instruction...</string>
     <string name="send_button">Send</string>
-    <string name="accessibility_error">Please enable Accessibility Service first</string>
-    <string name="enable_action">Enable</string>
+    <string name="accessibility_required">Accessibility Required</string>
+    <string name="shizuku_permission_required">Please complete required permissions in Settings</string>
+    <string name="shizuku_permission_granted_toast">Shizuku permission granted</string>
+    <string name="shizuku_permission_denied_toast">Shizuku permission denied</string>
+    <string name="shizuku_open_app_toast">Shizuku Manager not detected, cannot show permission dialog</string>
+    <string name="error_required_permissions_missing">Required permissions are not completed</string>
+
+    <!-- Shizuku Settings Screen -->
+    <string name="shizuku_settings_title">Shizuku</string>
+    <string name="shizuku_settings_entry">Shizuku</string>
+    <string name="shizuku_status_label">Status</string>
+    <string name="shizuku_status_running">Running</string>
+    <string name="shizuku_status_stopped">Stopped</string>
+    <string name="shizuku_status_connecting">Connecting</string>
+    <string name="shizuku_status_failed">Connection failed</string>
+    <string name="shizuku_wireless_desc">AI automation required, used for adb commands.</string>
+    <string name="shizuku_wireless_desc_toggle">When network changes, Wireless debugging may be disabled. Try toggling it off and on if discovery fails.</string>
+    <string name="shizuku_open_developer_options">Open Developer Options</string>
+    <string name="shizuku_restart_pairing_service">Restart Pairing Service</string>
+        <string name="shizuku_searching">Searching for wireless debugging service…</string>
+    <string name="shizuku_enable_wireless_first">Please enable Wireless debugging in Developer options first.</string>
+    <string name="shizuku_port_found">Port found: %d</string>
+    <string name="shizuku_start_btn">Start Shizuku</string>
+    <string name="shizuku_started">Started</string>
+    <string name="shizuku_start_success">Shizuku started.</string>
+    <string name="shizuku_open_manager">Open Shizuku</string>
+    <string name="shizuku_manual_port_hint">Or enter the port shown in Developer options → Wireless debugging.</string>
+    <string name="shizuku_port_label">Port</string>
+    <string name="shizuku_refresh_port">Refresh port</string>
+    <string name="shizuku_invalid_port">Please enter a valid port (1–65535)</string>
+    <string name="shizuku_requires_android11">Wireless debugging requires Android 11 or above.</string>
+
+    <!-- Pairing -->
+    <string name="shizuku_pair_btn">Pair with device</string>
+    <string name="shizuku_pair_desc">First-time use: Get the 6-digit pairing code from Developer options → Wireless debugging and enter it in the popup.</string>
+    <string name="shizuku_pairing_title">Enter pairing code</string>
+    <string name="shizuku_pairing_searching">Searching for pairing service</string>
+    <string name="shizuku_pairing_message">Go to Developer options → Wireless debugging → Pair device with pairing code. Enter the 6-digit code shown on your device.</string>
+    <string name="shizuku_pairing_code_label">Pairing code</string>
+    <string name="shizuku_pairing_code_invalid">Please enter 6 digits</string>
+    <string name="shizuku_pairing_code_wrong">Pairing code is wrong.</string>
+    <string name="shizuku_pair_success">Pairing successful. You can now start Shizuku.</string>
+    <string name="shizuku_already_paired">Already paired</string>
+    <string name="shizuku_pair_failed">Pairing failed</string>
+    <string name="shizuku_cannot_connect">Cannot connect to wireless debugging service.</string>
+    <string name="notification_channel_shizuku_pairing">Shizuku pairing</string>
+    <string name="notification_channel_shizuku_pairing_banner">Shizuku pairing (banner)</string>
+    <string name="shizuku_pairing_banner_hint">If the pairing notification does not pop up as a banner, go to Settings → Apps → Special app access → Display over other apps / Full screen intents and enable this app.</string>
+    <string name="shizuku_pairing_stop">Stop</string>
+    <string name="shizuku_pairing_found_title">Pairing service found</string>
+    <string name="shizuku_pairing_found_desc">Floating window is open. Enter the 6-digit pairing code.</string>
+    <string name="shizuku_pairing_input_action">Enter pairing code</string>
+    <string name="shizuku_pairing_working">Pairing in progress…</string>
+    <string name="shizuku_pairing_started_toast">Pairing started. Go to Wireless debugging → Pair device with pairing code, then enter it in the floating window.</string>
+    <string name="shizuku_pairing_overlay_permission_required">Overlay permission required to show pairing input on Settings screen. Please grant it first.</string>
+    <string name="shizuku_request_failed_toast">Failed to request Shizuku permission</string>
+    <string name="shizuku_nearby_permission_required">需要授予“附近设备”权限才能发现无线调试服务</string>
+    <string name="tap_to_enable">Tap to enable</string>
     <string name="overlay_error">Required to show Floating Window over other apps</string>
-    <string name="battery_optimization_error">Required to prevent system from killing the service</string>
     <string name="grant_action">Grant</string>
     <string name="welcome_message">Welcome to AutoGLM\nI can help you operate your phone.\nTry saying: "Help me check the weather"</string>
     
@@ -41,13 +102,25 @@
     <string name="base_url_hint_doubao">Example: https://ark.cn-beijing.volces.com/api/v3</string>
     <string name="model_name_placeholder_doubao">doubao-seed-1-6-251015</string>
     <string name="current_model">Current Model: %1$s</string>
+
+    <!-- Master/Sub Model -->
+    <string name="master_model_title">Master Model (Memory)</string>
+    <string name="master_model_desc">Periodic summarization to compress context, avoid token overflow. Optional.</string>
+    <string name="sub_model_title">Sub Model</string>
+    <string name="sub_model_desc">Model for action execution. Same as master or independently configured.</string>
+    <string name="sub_use_master_config">Use same config as master model</string>
+    <string name="master_intent_prompt">First identify user intent: (1) Task - user wants to do something; (2) False wake-up - accidental trigger; (3) Casual chat.\nIf false wake-up or chat: respond friendly and call finish(message=\"...\").\nIf task: generate a task plan and output the first action. You will receive screen descriptions (text from vision model) at each step to guide your decisions.\n\n**Task plan rules**: Each step must be self-contained and specific. For send-message/comment tasks, the plan must include \"type content\", \"tap send button\", and \"verify UI reacted (e.g. message in chat)\". For summarize/view steps use \"current\".\n\n**Important**: Use target for tap actions (e.g. do(action=\"Tap\", target=\"search icon\")), direction for swipe (e.g. do(action=\"Swipe\", direction=\"up\")). No coordinates needed.</string>
+    <string name="master_step_prompt">Based on the screen description and task progress below, decide the next action.\nOutput one action at a time.\nIf all tasks complete, call finish(message=\"summary\").\nIf stuck or error, call finish(message=\"error: description\").\n\n**Important**: For send/submit tasks, Tap send after Type, then verify the UI has reacted (e.g. message appears in chat). Only call finish after confirming success. Do NOT finish without verifying.\n\nUpdate task plan status in &lt;think&gt; (&lt;task_plan&gt; with [x] done, [/] in progress, [ ] pending).</string>
+    <string name="voice_input_label">Voice input (may contain recognition errors — please correct first, then analyze intent)</string>
+    <string name="text_input_label">User input</string>
+
     <string name="cancel">Cancel</string>
     <string name="save">Save</string>
     <string name="back">Back</string>
     <string name="close">Close</string>
     <string name="language_label">Language</string>
     <string name="language_english">English</string>
-    <string name="language_chinese">Chinese</string>
+    <string name="language_chinese">中文</string>
 
     <!-- Floating Window -->
     <string name="fw_ready">Ready</string>
@@ -55,13 +128,25 @@
     <string name="fw_error_title">AutoGLM Error</string>
     <string name="fw_ready_title">AutoGLM Ready</string>
     <string name="fw_stop">Stop</string>
+    <string name="fw_pause">Pause</string>
+    <string name="fw_resume">Resume</string>
+    <string name="fw_close">Close</string>
     <string name="fw_return_app">Return to App</string>
+    <string name="fw_task_list">Task List</string>
+    <string name="fw_thinking">Thinking</string>
+    <string name="fw_voice_input">Hold to speak</string>
+    <string name="fw_show_details_title">Floating Window</string>
+    <string name="fw_show_details_desc">Show details and thinking process</string>
 
     <!-- ChatViewModel Status & Errors -->
     <string name="status_stopped">Stopped</string>
     <string name="error_api_key_missing">Please set API Key first</string>
-    <string name="error_service_not_connected">Service not connected. Please try disabling and re-enabling Accessibility Service in Settings.</string>
+    <string name="error_service_not_connected">Required permissions are not completed</string>
+    <string name="error_shizuku_needs_accessibility">Shizuku mode still requires Accessibility Service to execute actions</string>
     <string name="status_thinking">Thinking...</string>
+    <string name="status_paused">Paused. Please complete manual operation and tap Resume to continue.</string>
+    <string name="status_reviewing_task">Reviewing task...</string>
+    <string name="status_screenshot_taking">Taking screenshot...</string>
     <string name="error_screenshot_failed">Screenshot failed</string>
     <string name="error_last_action_failed">Last action failed.</string>
     <string name="error_runtime_exception">Runtime exception: %1$s</string>
@@ -121,10 +206,11 @@
     <string name="switch_input_mode">Switch Input Mode</string>
     <string name="voice_cancel">Cancel</string>
     <string name="text_copied">Text copied</string>
-    <string name="clear_chat">Clear Chat</string>
-    <string name="clear_chat_title">Clear Chat History</string>
-    <string name="clear_chat_message">Are you sure you want to clear all chat history?</string>
     <string name="confirm">Confirm</string>
+    <string name="required_permissions_title">Required Permissions</string>
+    <string name="required_permissions_desc">Shizuku, built-in IME, and overlay must be granted</string>
+    <string name="overlay_permission_title">Overlay Permission</string>
+    <string name="overlay_permission_desc">Used to show status over other apps</string>
 
     <!-- Update -->
     <string name="update_available_title">New Version Available: %1$s</string>
@@ -138,10 +224,17 @@
     <string name="new_version_badge">New</string>
 
     <!-- Battery Optimization Settings -->
-    <string name="battery_optimization_title">Battery Optimization</string>
+    <string name="battery_optimization_title">App Keep-alive</string>
+    <string name="battery_optimization_desc">Disable battery optimization restrictions for this app so it can run in the background</string>
     <string name="battery_optimization_desc_on">Ignored (Service stays alive in background)</string>
     <string name="battery_optimization_desc_off">Enabled (System may kill service)</string>
     <string name="battery_optimization_allow">Allow Background Run</string>
+    <string name="battery_optimization_go_settings">Go to Settings</string>
+
+    <!-- Wake Word Settings -->
+    <string name="wake_word_title">Voice Wake-up</string>
+    <string name="wake_word_desc">Say the wake word to activate voice assistant</string>
+    <string name="wake_word_label">Wake Word</string>
 
     <!-- Conversation List -->
     <string name="conversation_list_title">Conversation List</string>
@@ -191,4 +284,97 @@
     <string name="requesting_microphone_permission_toast">Requesting Microphone Permission...</string>
     <string name="failed_launch_permission_toast">Failed to launch app for permission</string>
     <string name="no_messages_to_continue_error">No messages to continue</string>
+
+    <!-- WakeUpInputController -->
+    <string name="wake_no_command_heard">No command heard</string>
+    <string name="wake_input_placeholder">Type what you want to say...</string>
+    <string name="wake_confirming">Confirming...</string>
+    <string name="wake_listening">Listening...</string>
+
+    <!-- Notification -->
+    <string name="notification_title_running">AutoGLM Running</string>
+    <string name="notification_text_voice_wake">Voice wake-up serving...</string>
+
+    <!-- Offline command status messages -->
+    <string name="status_shizuku_required">Shizuku permission required; </string>
+    <string name="status_background_cleared">Background cleared</string>
+    <string name="status_brightness_set">Brightness set to %1$d%%</string>
+    <string name="status_brightness_need_permission">Permission needed for brightness</string>
+    <string name="status_brightness_increased">Brightness increased</string>
+    <string name="status_brightness_decreased">Brightness decreased</string>
+    <string name="status_volume_set">Volume set to %1$d%%</string>
+    <string name="status_volume_need_shizuku">Shizuku permission needed for volume</string>
+    <string name="status_volume_need_shizuku_short">Shizuku permission required</string>
+    <string name="status_volume_increased">Volume increased</string>
+    <string name="status_volume_decreased">Volume decreased</string>
+    <string name="status_locked">Screen locked</string>
+    <string name="status_screenshot_taken">Screenshot taken</string>
+    <string name="status_wifi_on">WiFi on</string>
+    <string name="status_wifi_off">WiFi off</string>
+    <string name="status_mobile_data_on">Mobile data on</string>
+    <string name="status_mobile_data_off">Mobile data off</string>
+    <string name="status_nfc_on">NFC on</string>
+    <string name="status_nfc_off">NFC off</string>
+    <string name="status_dnd_on">Do Not Disturb on</string>
+    <string name="status_dnd_off">Do Not Disturb off</string>
+    <string name="status_vibrate_on">Vibrate mode on</string>
+    <string name="status_vibrate_off">Vibrate off</string>
+    <string name="status_silent_on">Silent mode on</string>
+    <string name="status_silent_off">Silent off</string>
+    <string name="status_ring_on">Ring mode on</string>
+    <string name="status_flashlight_on">Flashlight on</string>
+    <string name="status_flashlight_off">Flashlight off</string>
+    <string name="status_dark_mode_on">Dark mode on</string>
+    <string name="status_dark_mode_off">Dark mode off</string>
+    <string name="status_auto_rotate_on">Auto-rotate on</string>
+    <string name="status_auto_rotate_off">Auto-rotate off</string>
+    <string name="status_bluetooth_on">Bluetooth on</string>
+    <string name="status_bluetooth_off">Bluetooth off</string>
+    <string name="status_airplane_on">Airplane mode on</string>
+    <string name="status_airplane_off">Airplane mode off</string>
+    <string name="status_power_saver_on">Power saver on</string>
+    <string name="status_power_saver_off">Power saver off</string>
+    <string name="status_location_on">Location on</string>
+    <string name="status_location_off">Location off</string>
+    <string name="status_media_volume_off">Media volume off</string>
+
+    <!-- Clean background status -->
+    <string name="status_entering_background">Entering background...</string>
+    <string name="status_finding_clear_button">Finding clear button...</string>
+    <string name="status_clear_button_clicked">Clear button clicked</string>
+    <string name="status_clear_button_not_found">Clear button not found</string>
+
+    <!-- WakeWordDetector / SpeechRecognizerManager errors -->
+    <string name="wake_word_default">皮皮虾</string>
+    <string name="error_model_load_failed">Model load failed, please restart app</string>
+    <string name="error_mic_init_failed">Microphone init failed</string>
+    <string name="error_recording_failed">Recording failed: %1$s</string>
+    <string name="error_voice_model_not_ready">Voice model not ready</string>
+    <string name="error_no_command_detected">No command detected, please retry</string>
+    <string name="error_recognition_failed">Recognition failed, please retry</string>
+    <string name="error_recognition_error">Recognition error: %1$s</string>
+    <string name="error_model_error">Model error: %1$s</string>
+    <string name="error_voice_model_loading">Voice model loading, please retry later</string>
+    <string name="error_recording_start_failed">Recording start failed</string>
+    <string name="error_no_voice_detected">No voice detected, please retry</string>
+    <string name="error_no_content_recognized">No content recognized, please retry</string>
+    <string name="error_recognition_failed_with_msg">Recognition failed: %1$s</string>
+
+    <!-- TextInputHandler -->
+    <string name="error_visual_input_failed">Incorrect text entered</string>
+    <string name="error_shizuku_no_text_input">Required permissions are not completed yet</string>
+
+    <!-- ConversationRepository -->
+    <string name="default_conversation_title">New Conversation</string>
+
+    <!-- ConversationListViewModel time -->
+    <string name="time_just_now">Just now</string>
+    <string name="time_minutes_ago">%1$d min ago</string>
+    <string name="time_hours_ago">%1$d h ago</string>
+    <string name="time_days_ago">%1$d d ago</string>
+    <string name="date_format_mm_dd">MM/dd</string>
+
+    <!-- FloatingWindowContent status check -->
+    <string name="status_error_prefix">Error</string>
+    <string name="status_runtime_exception_prefix">Runtime exception</string>
 </resources>

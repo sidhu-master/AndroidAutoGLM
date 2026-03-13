@@ -15,6 +15,9 @@ if (localPropertiesFile.exists()) {
     localProperties.load(localPropertiesFile.inputStream())
 }
 val defaultApiKey = localProperties.getProperty("ZHIPU_API_KEY") ?: ""
+val minimaxApiKey = localProperties.getProperty("MINIMAX_API_KEY") ?: ""
+val appVersionCode = (project.findProperty("app.versionCode") as String?)?.toIntOrNull() ?: 1
+val appVersionName = (project.findProperty("app.versionName") as String?) ?: "1.0.0"
 
 // Tasks
 tasks.register("downloadModel") {
@@ -49,21 +52,51 @@ tasks.register("downloadModel") {
     }
 }
 
+// 从 Shizuku manager 构建产物复制 libshizuku.so、libadb.so 到 jniLibs（用于无线调试启动和配对）
+tasks.register("copyShizukuLibs") {
+    doLast {
+        val shizukuRoot = rootProject.file("Shizuku")
+        // AGP 8.x: mergeDebugNativeLibs/out/lib/arm64-v8a；旧版: debug/out/lib/arm64-v8a
+        val paths = listOf(
+            "manager/build/intermediates/merged_native_libs/debug/mergeDebugNativeLibs/out/lib/arm64-v8a",
+            "manager/build/intermediates/merged_native_libs/debug/out/lib/arm64-v8a"
+        )
+        val managerBuild = paths.map { shizukuRoot.resolve(it) }.firstOrNull { it.exists() }
+        val dest = file("src/main/jniLibs/arm64-v8a")
+        if (managerBuild != null) {
+            dest.mkdirs()
+            listOf("libshizuku.so", "libadb.so").forEach { lib ->
+                val src = managerBuild.resolve(lib)
+                if (src.exists()) {
+                    src.copyTo(dest.resolve(lib), overwrite = true)
+                    println("Copied $lib to jniLibs")
+                } else {
+                    println("Warning: $lib not found. Build Shizuku manager: cd Shizuku && ./gradlew :manager:assembleDebug")
+                }
+            }
+        } else {
+            println("Shizuku manager build not found. Run: cd Shizuku && ./gradlew :manager:assembleDebug")
+        }
+    }
+}
+
 // Hook into preBuild
 tasks.named("preBuild") {
-    dependsOn("downloadModel")
+    dependsOn("downloadModel", "copyShizukuLibs")
 }
 
 android {
     namespace = "com.sidhu.androidautoglm"
-    compileSdk = 34
+    compileSdk = 35
+
+    ndkVersion = "26.1.10909125"
 
     defaultConfig {
         applicationId = "com.sidhu.androidautoglm"
         minSdk = 30
         targetSdk = 34
-        versionCode = 7
-        versionName = "1.1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -71,6 +104,11 @@ android {
         }
         
         buildConfigField("String", "DEFAULT_API_KEY", "\"$defaultApiKey\"")
+        buildConfigField("String", "MINIMAX_API_KEY", "\"$minimaxApiKey\"")
+
+        ndk {
+            abiFilters += setOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -107,6 +145,7 @@ android {
         }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            pickFirsts += setOf("META-INF/versions/9/OSGI-INF/MANIFEST.MF")
         }
     }
 }
@@ -144,9 +183,14 @@ dependencies {
 
     // DataStore (Preferences)
     implementation("androidx.datastore:datastore-preferences:1.0.0")
-    
-    // Markdown
-    implementation("com.github.jeziellago:compose-markdown:0.3.7")
+
+    // Shizuku API (系统级控制：WiFi/蓝牙/音量等)
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
+
+    // Shizuku 内置启动器（无线调试，通过 includeBuild 引入）
+    implementation("com.sidhu.androidautoglm:shizuku-starter:1.0.0")
+    implementation("moe.shizuku:server")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
@@ -156,7 +200,5 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
-    // implementation("com.sidhu:autoinput")
-    implementation("com.sidhu.autoinput:library:1.1.1")
     implementation(files("libs/sherpa-onnx-1.12.20.aar"))
 }

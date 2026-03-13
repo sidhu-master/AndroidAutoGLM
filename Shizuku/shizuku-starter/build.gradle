@@ -1,0 +1,60 @@
+plugins {
+    id 'com.android.library'
+    id 'org.jetbrains.kotlin.android'
+    id 'maven-publish'
+}
+
+group = 'com.sidhu.androidautoglm'
+version = '1.0.0'
+
+afterEvaluate {
+    publishing {
+        publications {
+            release(MavenPublication) {
+                from components.release
+                groupId = 'com.sidhu.androidautoglm'
+                artifactId = 'shizuku-starter'
+                version = '1.0.0'
+            }
+        }
+    }
+}
+
+android {
+    namespace 'com.sidhu.androidautoglm.shizuku'
+    compileSdk 34
+    publishing {
+        singleVariant("release") {}
+    }
+
+    defaultConfig {
+        minSdk 30
+        targetSdk 34
+    }
+    buildFeatures {
+        buildConfig = true
+    }
+    // native 构建暂禁：libshizuku.so、libadb.so 需从 manager 构建产物复制
+    // externalNativeBuild {
+    //     cmake { path 'src/main/jni/CMakeLists.txt'; version = "3.22.1" }
+    // }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+    packaging {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.annotation:annotation:1.3.0'
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+    implementation 'org.bouncycastle:bcpkix-jdk18on:1.80'
+}

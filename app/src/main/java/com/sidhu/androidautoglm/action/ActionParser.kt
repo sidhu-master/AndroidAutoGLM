@@ -1,9 +1,11 @@
 package com.sidhu.androidautoglm.action
 
 import android.util.Log
+import com.sidhu.androidautoglm.vision.MasterAction
 
 sealed class Action {
-    data class Tap(val x: Int, val y: Int) : Action()
+    /** 普通点击；confirmationMessage 非空时表示敏感操作需用户确认 */
+    data class Tap(val x: Int, val y: Int, val confirmationMessage: String? = null) : Action()
     data class DoubleTap(val x: Int, val y: Int) : Action()
     data class LongPress(val x: Int, val y: Int) : Action()
     data class Swipe(val startX: Int, val startY: Int, val endX: Int, val endY: Int) : Action()
@@ -13,11 +15,48 @@ sealed class Action {
     object Home : Action()
     data class Wait(val durationMs: Long) : Action()
     data class Finish(val message: String) : Action()
+    /** 登录/验证码等需用户协助 */
+    data class TakeOver(val message: String) : Action()
+    /** 多个选项时需用户选择 */
+    object Interact : Action()
+    /** 记录页面内容（占位，无实际操作） */
+    object Note : Action()
+    /** 总结/评论页面（占位，无实际操作） */
+    data class CallApi(val instruction: String) : Action()
     data class Error(val reason: String) : Action()
     object Unknown : Action()
 }
 
 object ActionParser {
+
+    // 正则编译开销较大，提升为常量，整个生命周期只编译一次
+    private val FINISH_REGEX = Regex(
+        """finish\s*\(\s*message\s*=\s*["']([\s\S]*?)["']\s*\)""",
+        RegexOption.IGNORE_CASE
+    )
+    private val DO_REGEX = Regex(
+        """do\s*\((.*)\)""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+
+    /**
+     * 找到文本中要执行的 action 的起始位置。
+     * - 若只有 do 或只有 finish：取最后一个（支持 fallback 场景）
+     * - 若同时有 do 和 finish：优先取最后一个 do，避免模型在未执行 Type/发送 时就 finish
+     *   （常见：模型输出 do(Type) 和 finish 同句，误以为已发送，实际未执行）
+     * @return 起始索引，未找到返回 -1
+     */
+    private fun findActionStart(text: String): Int {
+        val lastDo = text.lastIndexOf("do(")
+        val lastFinish = text.lastIndexOf("finish(")
+        return when {
+            lastDo < 0 && lastFinish < 0 -> -1
+            lastDo < 0 -> lastFinish
+            lastFinish < 0 -> lastDo
+            // 同时存在：优先执行 do，避免过早 finish（如 Type+finish 时先执行 Type）
+            else -> lastDo
+        }
+    }
 
     /**
      * Parses a full response string into an Action object for execution.
@@ -32,12 +71,8 @@ object ActionParser {
         val cleanResponse = response.trim()
         Log.d("ActionParser", "Parsing: $cleanResponse")
 
-        // First, extract just the action part
-        val actionStart = when {
-            cleanResponse.contains("do(") -> cleanResponse.indexOf("do(")
-            cleanResponse.contains("finish(") -> cleanResponse.indexOf("finish(")
-            else -> -1
-        }
+        // Extract the LAST action (model may output fallback after "上一个动作执行失败")
+        val actionStart = findActionStart(cleanResponse)
 
         val actionString = if (actionStart >= 0) {
             cleanResponse.substring(actionStart).trim()
@@ -89,14 +124,7 @@ object ActionParser {
 
     /**
      * Parses response into thinking and ParsedAction for display.
-     * Extracts only the FIRST complete do(...) or finish(...) block.
-     * Any content after the first action block is ignored.
-     *
-     * Examples:
-     * - "Thinking do(action=\"Tap\", element=[500, 750])" -> ("Thinking", ParsedAction(TAP, ...))
-     * - "do(action=\"Back\")" -> ("", ParsedAction(BACK, ...))
-     * - "finish(message=\"Done\")" -> ("", ParsedAction(FINISH, ...))
-     * - "No action here" -> ("No action here", null)
+     * Extracts the LAST complete do(...) or finish(...) block (same as extractActionString).
      *
      * @param content The raw response content
      * @return Pair of (thinking, ParsedAction?) where ParsedAction is null if no valid action found
@@ -104,12 +132,7 @@ object ActionParser {
     fun parseResponsePartsToParsedAction(content: String): Pair<String, ParsedAction?> {
         val trimmedContent = content.trim()
 
-        // Find the start of action: "do(" or "finish("
-        val actionStart = when {
-            trimmedContent.contains("do(") -> trimmedContent.indexOf("do(")
-            trimmedContent.contains("finish(") -> trimmedContent.indexOf("finish(")
-            else -> -1
-        }
+        val actionStart = findActionStart(trimmedContent)
 
         if (actionStart < 0) {
             // No action found, treat entire content as thinking
@@ -142,21 +165,19 @@ object ActionParser {
     }
 
     /**
-     * Extracts the raw action string from content for logging purposes.
-     * Returns the first complete do(...) or finish(...) block, or empty string if not found.
+     * Extracts the raw action string from content for logging and execution.
+     * Returns the LAST complete do(...) or finish(...) block, or empty string if not found.
      *
-     * This is useful for logging and storing raw action strings without parsing.
+     * Uses LAST occurrence because when previous action fails, the model often outputs:
+     * "do(action=\"Launch\", app=\"抖音\")\n上一个动作执行失败。\ndo(action=\"Tap\", element=[435,856])"
+     * We should execute the Tap (the fallback), not the failed Launch.
      *
      * @param content The raw response content
      * @return The extracted action string, or empty string if no action found
      */
     fun extractActionString(content: String): String {
         val trimmedContent = content.trim()
-        val actionStart = when {
-            trimmedContent.contains("do(") -> trimmedContent.indexOf("do(")
-            trimmedContent.contains("finish(") -> trimmedContent.indexOf("finish(")
-            else -> -1
-        }
+        val actionStart = findActionStart(trimmedContent)
 
         if (actionStart < 0) return ""
 
@@ -181,9 +202,8 @@ object ActionParser {
     private fun parseToParsedAction(actionString: String): ParsedAction? {
         val cleanAction = actionString.trim()
 
-        // 1. Try to match finish(message="...")
-        val finishRegex = Regex("""finish\s*\(\s*message\s*=\s*["'](.*?)["']\s*\)""", RegexOption.IGNORE_CASE)
-        finishRegex.find(cleanAction)?.let {
+        // 1. Try to match finish(message="...") - [\s\S]*? 支持 message 内换行
+        FINISH_REGEX.find(cleanAction)?.let {
             return ParsedAction(
                 type = ActionType.FINISH,
                 rawParams = mapOf("message" to it.groupValues[1]),
@@ -192,8 +212,7 @@ object ActionParser {
         }
 
         // 2. Try to match do(action="...", ...)
-        val doRegex = Regex("""do\s*\((.*)\)""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        val doMatch = doRegex.find(cleanAction)
+        val doMatch = DO_REGEX.find(cleanAction)
 
         if (doMatch != null) {
             val args = doMatch.groupValues[1]
@@ -284,15 +303,13 @@ object ActionParser {
         val cleanAction = actionString.trim()
         Log.d("ActionParser", "Parsing action: $cleanAction")
 
-        // 1. Try to match finish(message="...")
-        val finishRegex = Regex("""finish\s*\(\s*message\s*=\s*["'](.*?)["']\s*\)""", RegexOption.IGNORE_CASE)
-        finishRegex.find(cleanAction)?.let {
+        // 1. Try to match finish(message="...") - DOT_MATCHES_ALL 支持 message 内换行
+        FINISH_REGEX.find(cleanAction)?.let {
             return Action.Finish(it.groupValues[1])
         }
 
         // 2. Try to match do(action="...", ...)
-        val doRegex = Regex("""do\s*\((.*)\)""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        val doMatch = doRegex.find(cleanAction)
+        val doMatch = DO_REGEX.find(cleanAction)
 
         if (doMatch != null) {
             val args = doMatch.groupValues[1]
@@ -303,7 +320,8 @@ object ActionParser {
             return when (actionType.lowercase()) {
                 "tap" -> {
                     val element = params["element"] as? List<*>
-                    parseTapAction(element, screenWidth, screenHeight) { x, y -> Action.Tap(x, y) }
+                    val msg = params["message"]?.toString()
+                    parseTapAction(element, screenWidth, screenHeight) { x, y -> Action.Tap(x, y, msg) }
                 }
                 "double tap" -> {
                     val element = params["element"] as? List<*>
@@ -346,6 +364,16 @@ object ActionParser {
                     val durationSeconds = durationStr.replace("seconds", "").trim().toDoubleOrNull() ?: 1.0
                     Action.Wait((durationSeconds * 1000).toLong())
                 }
+                "take_over" -> {
+                    val msg = params["message"]?.toString() ?: "需要用户协助"
+                    Action.TakeOver(msg)
+                }
+                "interact" -> Action.Interact
+                "note" -> Action.Note
+                "call_api" -> {
+                    val instruction = params["instruction"]?.toString() ?: ""
+                    Action.CallApi(instruction)
+                }
                 else -> Action.Unknown
             }
         }
@@ -355,7 +383,74 @@ object ActionParser {
     }
 
     private fun parseParams(args: String): Map<String, Any> {
-        // Delegate to unified parsing function, return only normalized params
         return parseActionParams(args).second
+    }
+
+    // -----------------------------------------------------------------------
+    // New architecture: parse master AI output into MasterAction (target-based)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Parse the master AI's response into a [MasterAction].
+     * Supports both the new target/direction format and legacy element/coordinate format.
+     */
+    fun parseMasterAction(response: String): MasterAction {
+        val actionStr = extractActionString(response)
+        if (actionStr.isBlank()) {
+            return MasterAction.Finish(response.trim())
+        }
+        return parseMasterActionString(actionStr)
+    }
+
+    private fun parseMasterActionString(actionString: String): MasterAction {
+        val clean = actionString.trim()
+
+        FINISH_REGEX.find(clean)?.let {
+            return MasterAction.Finish(it.groupValues[1])
+        }
+
+        val doMatch = DO_REGEX.find(clean) ?: return MasterAction.Error("Unknown format: $clean")
+        val args = doMatch.groupValues[1]
+        val (rawParams, _) = parseActionParams(args)
+
+        val actionType = rawParams["action"] ?: return MasterAction.Error("Missing action type")
+
+        return when (actionType.lowercase()) {
+            "tap" -> {
+                val target = rawParams["target"]
+                if (target != null) MasterAction.Tap(target)
+                else MasterAction.Error("Missing target for Tap")
+            }
+            "double tap" -> {
+                val target = rawParams["target"]
+                if (target != null) MasterAction.DoubleTap(target)
+                else MasterAction.Error("Missing target for Double Tap")
+            }
+            "long press" -> {
+                val target = rawParams["target"]
+                if (target != null) MasterAction.LongPress(target)
+                else MasterAction.Error("Missing target for Long Press")
+            }
+            "swipe" -> {
+                val direction = rawParams["direction"]
+                if (direction != null) MasterAction.Swipe(direction)
+                else MasterAction.Error("Missing direction for Swipe")
+            }
+            "type", "type_name" -> {
+                val text = rawParams["text"] ?: return MasterAction.Error("Missing text for Type")
+                MasterAction.Type(text)
+            }
+            "launch" -> {
+                val app = rawParams["app"] ?: return MasterAction.Error("Missing app for Launch")
+                MasterAction.Launch(app)
+            }
+            "back" -> MasterAction.Back
+            "home" -> MasterAction.Home
+            "wait" -> {
+                val dur = rawParams["duration"]?.replace("seconds", "")?.trim()?.toFloatOrNull() ?: 1f
+                MasterAction.Wait(dur)
+            }
+            else -> MasterAction.Unknown
+        }
     }
 }

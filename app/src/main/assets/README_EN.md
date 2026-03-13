@@ -4,14 +4,21 @@ Welcome to **AutoGLM Android Assistant**! This is an intelligent agent applicati
 
 ## 1. Quick Start
 
-### Step 1: Grant Necessary Permissions
-When opening the app for the first time, the system will prompt you to grant the following two key permissions, which are essential for the app to function correctly:
-*   **Accessibility Service Permission**: Used to allow the AI to simulate clicks, swipes, and read screen content.
-*   **Overlay Permission**: Used to display the AI's running status and control panel over other apps.
+### Step 1: Enable Wireless Debugging and Pair Shizuku
+This version no longer relies on Accessibility permission. It uses Shizuku + wireless debugging for automation and screenshots.
 
-Please click the prompt buttons inside the app (e.g., "Go to Enable", "Go to Grant") to jump to the system settings and turn on the corresponding switches.
+**Before pairing**: Go to **Settings** → **Apps** → **AutoGLM** → **Notifications**, and enable **Banner** (or "Show as banner") so the pairing notification can pop up when the pairing service is found.
 
-### Step 2: Get and Configure API Key
+1. Open **Settings** → **Developer options** and enable **Wireless debugging**.
+2. Return to the app → **Settings** → **Shizuku**, tap **Pair device**.
+3. Open **Wireless debugging**, tap **Pair device with pairing code**, and enter the code shown in the app dialog.
+4. After pairing, tap **Start Shizuku** and allow the permission request if prompted.
+5. On Android 13+, allow the **Nearby devices** permission to auto-discover the port.
+
+### Step 2: Grant Overlay Permission
+Enable **Overlay permission** in system settings so the floating window can show status.
+
+### Step 3: Get and Configure API Key
 This app is based on the Zhipu AI large model capabilities and requires an API Key to use.
 
 1.  **Get API Key**:
@@ -25,7 +32,7 @@ This app is based on the Zhipu AI large model capabilities and requires an API K
     *   Click **"Enter API Key"** or **"Edit API Key"**.
     *   Paste the copied API Key into the input box and save.
 
-### Step 3: Start Using
+### Step 4: Start Using
 1.  Enter your instruction in the dialog box on the home page, for example: "Help me check tomorrow's weather", "Open TikTok, search for Xi De Hu AI Programming, and follow".
 2.  Click the **Send** button.
 3.  The app will automatically jump to the desktop or the corresponding app and display the current execution status via a **Floating Window**.
@@ -59,7 +66,7 @@ During task execution, a floating window will appear in the lower right corner o
 ---
 
 ## 3. FAQ
-*   **Why no action is performed?** Please check if the Accessibility Service has been turned off by the system (some phones may mistakenly close it when clearing background apps).
+*   **Why no action is performed?** Make sure Wireless debugging is enabled and Shizuku is started and authorized.
 *   **API Key Invalid?** Please confirm if there are extra spaces in the Key, or if the account balance is sufficient.
 
 Enjoy using it!

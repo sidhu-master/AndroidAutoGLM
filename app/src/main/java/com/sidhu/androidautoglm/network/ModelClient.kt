@@ -32,25 +32,19 @@ class ModelClient(
     private val geminiApi: GeminiApi?
     private val doubaoApi: DoubaoApi?
 
-    init {
-        // val logging = HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.NONE }
-        val client = OkHttpClient.Builder()
-            // .addInterceptor(logging)
-            .connectTimeout(60, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(60, TimeUnit.SECONDS)
-            .build()
+    // 缓存 isDoubao 判断，避免 sendRequest 每次重复计算
+    private val isDoubao = modelName.contains("doubao", ignoreCase = true) ||
+            baseUrl.contains("volces.com", ignoreCase = true)
 
+    init {
         val finalBaseUrl = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
         Log.d("AutoGLM_Debug", "ModelClient initialized with Base URL: $finalBaseUrl")
         
         val retrofit = Retrofit.Builder()
             .baseUrl(finalBaseUrl)
-            .client(client)
+            .client(sharedHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-
-        val isDoubao = modelName.contains("doubao", ignoreCase = true) || baseUrl.contains("volces.com", ignoreCase = true)
 
         if (isGemini) {
             openAiApi = null
@@ -69,7 +63,6 @@ class ModelClient(
 
     suspend fun sendRequest(history: List<Message>, screenshot: Bitmap?): String {
         Log.d("AutoGLM_Debug", "ModelClient.sendRequest called. isGemini: $isGemini")
-        val isDoubao = modelName.contains("doubao", ignoreCase = true) || baseUrl.contains("volces.com", ignoreCase = true)
         return if (isGemini) {
             sendGeminiRequest(history)
         } else if (isDoubao) {
@@ -77,6 +70,26 @@ class ModelClient(
         } else {
             sendOpenAIRequest(history)
         }
+    }
+
+    /** 是否支持视觉 API（用于屏幕描述、元素定位） */
+    fun supportsVision(): Boolean {
+        if (isGemini || isDoubao) return true
+        val isDeepSeek = modelName.contains("deepseek", ignoreCase = true) ||
+            baseUrl.contains("deepseek", ignoreCase = true)
+        return !isDeepSeek
+    }
+
+    /** 发送单次视觉请求：图片 + 文本提示，返回模型回复 */
+    suspend fun sendVisionRequest(prompt: String, bitmap: Bitmap): String {
+        val base64 = bitmapToBase64(bitmap)
+        val imageUrl = "data:image/jpeg;base64,$base64"
+        val content = listOf(
+            ContentItem(type = "text", text = prompt),
+            ContentItem(type = "image_url", imageUrl = ImageUrl(url = imageUrl))
+        )
+        val history = listOf(Message("user", content))
+        return sendRequest(history, null)
     }
 
     private suspend fun sendGeminiRequest(history: List<Message>): String {
@@ -224,6 +237,8 @@ class ModelClient(
                 }
                 return "Error: ${response.code()} $errorMessage"
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e("AutoGLM_Debug", "Doubao API Exception", e)
             return "Error: ${e.message}"
@@ -293,82 +308,102 @@ class ModelClient(
     }
     
     companion object {
+        /** 子AI系统提示（借鉴 Open-AutoGLM prompts_zh.py）：完整操作说明 + 18条规则 */
         const val SYSTEM_PROMPT = """
-你是一个智能体分析专家，可以根据操作历史和当前状态图执行一系列操作来完成任务。
-你必须严格按照要求输出以下格式：
+你是一个智能体分析专家，可以根据操作历史和当前状态图执行一系列操作来完成任务。你必须严格按照要求输出以下格式：
 <think>{think}</think>
 <answer>{action}</answer>
 
-其中：
-- {think} 是对你为什么选择这个操作的简短推理说明。
-- {action} 是本次执行的具体操作指令，必须严格遵循下方定义的指令格式。
+其中：{think} 是对你为何选择这个操作的简短推理说明；{action} 是本次执行的具体操作指令，必须严格遵循以下定义的指令格式。
 
 操作指令及其作用如下：
-- do(action="Launch", app="xxx")  
-    Launch是启动目标app的操作，这比通过主屏幕导航更快。此操作完成后，您将自动收到结果状态的截图。
-- do(action="Tap", element=[x,y])  
-    Tap是点击操作，点击屏幕上的特定点。可用此操作点击按钮、选择项目、从主屏幕打开应用程序，或与任何可点击的用户界面元素进行交互。坐标系统从左上角 (0,0) 开始到右下角（999,999)结束。此操作完成后，您将自动收到结果状态的截图。
-- do(action="Tap", element=[x,y], message="重要操作")  
-    基本功能同Tap，点击涉及财产、支付、隐私等敏感按钮时触发。
-- do(action="Type", text="xxx")  
-    Type是输入操作，在当前聚焦的输入框中输入文本。使用此操作前，请确保输入框已被聚焦（先点击它）。输入的文本将像使用键盘输入一样输入。重要提示：手机可能正在使用 ADB 键盘，该键盘不会像普通键盘那样占用屏幕空间。要确认键盘已激活，请查看屏幕底部是否显示 'ADB Keyboard {ON}' 类似的文本，或者检查输入框是否处于激活/高亮状态。不要仅仅依赖视觉上的键盘显示。自动清除文本：当你使用输入操作时，输入框中现有的任何文本（包括占位符文本和实际输入）都会在输入新文本前自动清除。你无需在输入前手动清除文本——直接使用输入操作输入所需文本即可。操作完成后，你将自动收到结果状态的截图。
-- do(action="Type_Name", text="xxx")  
-    Type_Name是输入人名的操作，基本功能同Type。
-- do(action="Interact")  
-    Interact是当有多个满足条件的选项时而触发的交互操作，询问用户如何选择。
-- do(action="Swipe", start=[x1,y1], end=[x2,y2])  
-    Swipe是滑动操作，通过从起始坐标拖动到结束坐标来执行滑动手势。可用于滚动内容、在屏幕之间导航、下拉通知栏以及项目栏或进行基于手势的导航。坐标系统从左上角 (0,0) 开始到右下角（999,999)结束。滑动持续时间会自动调整以实现自然的移动。此操作完成后，您将自动收到结果状态的截图。
-- do(action="Note", message="True")  
-    记录当前页面内容以便后续总结。
-- do(action="Call_API", instruction="xxx")  
-    总结或评论当前页面或已记录的内容。
-- do(action="Long Press", element=[x,y])  
-    Long Pres是长按操作，在屏幕上的特定点长按指定时间。可用于触发上下文菜单、选择文本或激活长按交互。坐标系统从左上角 (0,0) 开始到右下角（999,999)结束。此操作完成后，您将自动收到结果状态的屏幕截图。
-- do(action="Double Tap", element=[x,y])  
-    Double Tap在屏幕上的特定点快速连续点按两次。使用此操作可以激活双击交互，如缩放、选择文本或打开项目。坐标系统从左上角 (0,0) 开始到右下角（999,999)结束。此操作完成后，您将自动收到结果状态的截图。
-- do(action="Take_over", message="xxx")  
-    Take_over是接管操作，表示在登录和验证阶段需要用户协助。
-- do(action="Back")  
-    导航返回到上一个屏幕或关闭当前对话框。相当于按下 Android 的返回按钮。使用此操作可以从更深的屏幕返回、关闭弹出窗口或退出当前上下文。此操作完成后，您将自动收到结果状态的截图。
-- do(action="Home") 
-    Home是回到系统桌面的操作，相当于按下 Android 主屏幕按钮。使用此操作可退出当前应用并返回启动器，或从已知状态启动新任务。此操作完成后，您将自动收到结果状态的截图。
-- do(action="Wait", duration="x seconds")  
-    等待页面加载，x为需要等待多少秒。
-- finish(message="xxx")  
-    finish是结束任务的操作，表示准确完整完成任务，message是终止信息。 
+- do(action="Launch", app="xxx") 启动目标app，比主屏幕导航更快
+- do(action="Tap", element=[x,y]) 点击屏幕上的特定点，坐标0-999相对坐标
+- do(action="Tap", element=[x,y], message="重要操作") 基本功能同Tap，点击涉及财产、支付、隐私等敏感按钮时使用
+- do(action="Type", text="xxx") 在当前聚焦的输入框中输入文本，使用前请确保输入框已聚焦
+- do(action="Type_Name", text="xxx") 输入人名的操作，基本功能同Type
+- do(action="Swipe", start=[x1,y1], end=[x2,y2]) 滑动，从起始坐标拖动到结束坐标
+- do(action="Long Press", element=[x,y]) 长按
+- do(action="Double Tap", element=[x,y]) 双击
+- do(action="Back") 返回上一页或关闭对话框
+- do(action="Home") 回到系统桌面
+- do(action="Wait", duration="x seconds") 等待页面加载
+- do(action="Take_over", message="xxx") 登录或验证码等需要用户协助时使用
+- do(action="Interact") 有多个满足条件的选项时，询问用户如何选择
+- do(action="Note", message="True") 记录当前页面内容以便后续总结
+- do(action="Call_API", instruction="xxx") 总结或评论当前页面或已记录的内容
+- finish(message="xxx") 结束任务
+
+坐标系统从左上角(0,0)到右下角(999,999)。
 
 必须遵循的规则：
-1. 在执行任何操作前，先检查当前app是否是目标app，如果不是，先执行 Launch。
-2. 如果进入到了无关页面，先执行 Back。如果执行Back后页面没有变化，请点击页面左上角的返回键进行返回，或者右上角的X号关闭。
-3. 如果页面未加载出内容，最多连续 Wait 三次，否则执行 Back重新进入。
-4. 如果页面显示网络问题，需要重新加载，请点击重新加载。
-5. 如果当前页面找不到目标联系人、商品、店铺等信息，可以尝试 Swipe 滑动查找。
-6. 遇到价格区间、时间区间等筛选条件，如果没有完全符合的，可以放宽要求。
-7. 在做小红书总结类任务时一定要筛选图文笔记。
-8. 购物车全选后再点击全选可以把状态设为全不选，在做购物车任务时，如果购物车里已经有商品被选中时，你需要点击全选后再点击取消全选，再去找需要购买或者删除的商品。
-9. 在做外卖任务时，如果相应店铺购物车里已经有其他商品你需要先把购物车清空再去购买用户指定的外卖。
-10. 在做点外卖任务时，如果用户需要点多个外卖，请尽量在同一店铺进行购买，如果无法找到可以下单，并说明某个商品未找到。
-11. 请严格遵循用户意图执行任务，用户的特殊要求可以执行多次搜索，滑动查找。比如（i）用户要求点一杯咖啡，要咸的，你可以直接搜索咸咖啡，或者搜索咖啡后滑动查找咸的咖啡，比如海盐咖啡。（ii）用户要找到XX群，发一条消息，你可以先搜索XX群，找不到结果后，将"群"字去掉，搜索XX重试。（iii）用户要找到宠物友好的餐厅，你可以搜索餐厅，找到筛选，找到设施，选择可带宠物，或者直接搜索可带宠物，必要时可以使用AI搜索。
-12. 在选择日期时，如果原滑动方向与预期日期越来越远，请向反方向滑动查找。
-13. 执行任务过程中如果有多个可选择的项目栏，请逐个查找每个项目栏，直到完成任务，一定不要在同一项目栏多次查找，从而陷入死循环。
-14. 在执行下一步操作前请一定要检查上一步的操作是否生效，如果点击没生效，可能因为app反应较慢，请先稍微等待一下，如果还是不生效请调整一下点击位置重试，如果仍然不生效请跳过这一步继续任务，并在finish message说明点击不生效。
-15. 在执行任务中如果遇到滑动不生效的情况，请调整一下起始点位置，增大滑动距离重试，如果还是不生效，有可能是已经滑到底了，请继续向反方向滑动，直到顶部或底部，如果仍然没有符合要求的结果，请跳过这一步继续任务，并在finish message说明但没找到要求的项目。
-16. 在做游戏任务时如果在战斗页面如果有自动战斗一定要开启自动战斗，如果多轮历史状态相似要检查自动战斗是否开启。
-17. 如果没有合适的搜索结果，可能是因为搜索页面不对，请返回到搜索页面的上一级尝试重新搜索，如果尝试三次返回上一级搜索后仍然没有符合要求的结果，执行 finish(message="原因")。
-18. 在结束任务前请一定要仔细检查任务是否完整准确的完成，如果出现错选、漏选、多选的情况，请返回之前的步骤进行纠正。
+1. 执行任何操作前，先检查当前app是否是目标app，如果不是先执行Launch
+2. 进入无关页面时先执行Back；Back无效时点击左上角返回键或右上角X关闭
+3. 页面未加载出内容时，最多连续Wait三次，否则Back重新进入
+4. 网络问题时点击重新加载
+5. 找不到目标信息时尝试Swipe滑动查找
+6. 筛选条件可放宽要求
+7. 小红书总结类任务要筛选图文笔记
+8. 购物车任务：已有选中商品时先全选再取消全选，再找目标商品
+9. 外卖任务：店铺购物车有其它商品时先清空再购买指定外卖
+10. 严格遵循用户意图，可多次搜索、滑动查找
+11. 日期选择时若滑动方向与预期相反，向反方向滑动
+12. 多个项目栏时逐个查找，不要在同一项目栏多次查找陷入死循环
+13. 执行前检查上一步是否生效，未生效可等待、调整位置重试或跳过并在finish说明
+14. 滑动不生效时调整起始点、增大距离；可能已滑到底，向反方向滑动
+15. 游戏战斗页面有自动战斗时开启
+16. 搜索无结果时返回上一级重试，三次后仍无结果则finish说明原因
+17. 结束前仔细检查任务是否完整准确完成，错选漏选多选需返回纠正
+18. 发送/提交类任务：Type 后 Tap 发送/提交按钮，然后根据下一步屏幕描述验证界面已有反应（如消息在聊天记录中、评论已显示），确认成功才能 finish。界面未变化可 Wait 重试或 finish 说明未生效
 """
+
+        /** 主模型用于任务审查：纠错字、整理任务描述、根据本机应用选择目标 App */
+        const val TASK_REVIEW_PROMPT = """
+你负责审查并整理用户任务，供后续自动化执行。请完成：
+
+1) 检查错别字并修正
+2) 若用户未指定应用，但任务需要特定 App（如订外卖、购物、打车、看视频等），根据「本机已安装应用」列表选择最合适的一个，并在任务中明确写出应用名。例如："帮我订外卖" → "在美团上帮我订外卖"（若本机有美团）
+3) 整理成清晰、可执行的任务描述
+
+输出要求：只输出整理后的任务内容，不要其他说明。若任务已清晰且已指定应用，可原样或微调输出。
+"""
+
+        /** 主模型用于 Call_API 的总结/评论提示（仅文字，不传图） */
+        const val CALL_API_PROMPT = """
+你是一个内容总结助手。根据用户指令和对话记录中的文字内容，进行总结或评论。
+要求：用中文，简洁准确，100字以内。只输出总结内容，不要其他说明。
+"""
+
+        /** 主模型用于记忆管理的摘要提示 */
+        const val SUMMARIZE_PROMPT = """
+请将以下任务执行历史总结为简洁摘要。必须保留：
+1) 用户原始目标
+2) 已完成的步骤（列出关键操作）
+3) 当前进度/状态
+
+用中文，200字以内。只输出摘要内容，不要其他说明。
+"""
+
+        // 全局共享的 OkHttpClient，复用连接池和线程池，避免每次实例化重建
+        val sharedHttpClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(60, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(60, TimeUnit.SECONDS)
+                .build()
+        }
 
         fun bitmapToBase64(bitmap: Bitmap): String {
             // 1. Resize if too large (max dimension 1024) to avoid server 500 errors
             val maxDimension = 1024
             val scale = if (bitmap.width > maxDimension || bitmap.height > maxDimension) {
-                val ratio = maxDimension.toFloat() / maxOf(bitmap.width, bitmap.height)
-                ratio
+                maxDimension.toFloat() / maxOf(bitmap.width, bitmap.height)
             } else {
                 1.0f
             }
             
-            val finalBitmap = if (scale < 1.0f) {
+            val isScaled = scale < 1.0f
+            val finalBitmap = if (isScaled) {
                 val newWidth = (bitmap.width * scale).toInt()
                 val newHeight = (bitmap.height * scale).toInt()
                 Log.d("AutoGLM_Debug", "Resizing image from ${bitmap.width}x${bitmap.height} to ${newWidth}x${newHeight}")
@@ -377,11 +412,17 @@ class ModelClient(
                 bitmap
             }
 
-            val outputStream = ByteArrayOutputStream()
-            finalBitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
-            val bytes = outputStream.toByteArray()
-            Log.d("AutoGLM_Debug", "Image Base64 size: ${bytes.size / 1024} KB")
-            return Base64.encodeToString(bytes, Base64.NO_WRAP)
+            return try {
+                val outputStream = ByteArrayOutputStream()
+                // quality=80 在 AI 视觉识别质量不变的前提下，体积比 100 缩小约 5 倍
+                finalBitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
+                val bytes = outputStream.toByteArray()
+                Log.d("AutoGLM_Debug", "Image Base64 size: ${bytes.size / 1024} KB")
+                Base64.encodeToString(bytes, Base64.NO_WRAP)
+            } finally {
+                // 仅回收缩放后的新 Bitmap，不回收调用方传入的原图
+                if (isScaled) finalBitmap.recycle()
+            }
         }
     }
 }

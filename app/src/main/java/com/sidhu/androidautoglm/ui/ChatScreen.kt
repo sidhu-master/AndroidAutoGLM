@@ -11,10 +11,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.AccessTime
-import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -28,7 +26,6 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,10 +37,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.activity.compose.BackHandler
 
-import android.net.Uri
 import android.os.Build
-import android.content.Intent
-import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
@@ -54,6 +48,7 @@ import androidx.compose.ui.res.stringResource
 import com.sidhu.androidautoglm.R
 import com.sidhu.androidautoglm.utils.SpeechRecognizerManager
 import com.sidhu.androidautoglm.utils.SherpaModelManager
+import com.sidhu.androidautoglm.utils.ShizukuHelper
 
 import android.content.Context
 import android.content.ContextWrapper
@@ -81,6 +76,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import rikka.shizuku.Shizuku
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import android.os.VibrationEffect
@@ -123,6 +119,7 @@ fun LanguageSwitchButton(modifier: Modifier = Modifier) {
 fun ChatScreen(
     viewModel: ChatViewModel,
     onOpenSettings: () -> Unit,
+    onOpenShizukuSettings: () -> Unit,
     onOpenConversationList: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -138,6 +135,28 @@ fun ChatScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val listState = rememberLazyListState()
+
+    var isShizukuRunning by remember { mutableStateOf(ShizukuHelper.isShizukuAvailable()) }
+    DisposableEffect(Unit) {
+        if (!Shizuku.isPreV11()) {
+            val binderListener = Shizuku.OnBinderReceivedListener {
+                isShizukuRunning = true
+                viewModel.checkShizukuConnection(context)
+            }
+            val deadListener = Shizuku.OnBinderDeadListener {
+                isShizukuRunning = false
+                viewModel.checkShizukuConnection(context)
+            }
+            Shizuku.addBinderReceivedListenerSticky(binderListener)
+            Shizuku.addBinderDeadListener(deadListener)
+            onDispose {
+                Shizuku.removeBinderReceivedListener(binderListener)
+                Shizuku.removeBinderDeadListener(deadListener)
+            }
+        } else {
+            onDispose { }
+        }
+    }
 
     // Control system bars (status bar and navigation bar) when in fullscreen image mode
     val window = (context as? Activity)?.window
@@ -161,6 +180,16 @@ fun ChatScreen(
         onDispose {
             insetsController?.show(WindowInsetsCompat.Type.systemBars())
         }
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                isShizukuRunning = ShizukuHelper.isShizukuAvailable()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(uiState.messages.size) {
@@ -207,13 +236,14 @@ fun ChatScreen(
         }
     }
 
-    // Check service status when app resumes (e.g. returning from Settings)
+    // ON_RESUME 首次进入时也会触发，因此无需额外的 LaunchedEffect(Unit) 重复执行
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                viewModel.checkServiceStatus()
                 viewModel.checkOverlayPermission(context)
                 viewModel.checkBatteryOptimization(context)
+                viewModel.checkShizukuConnection(context)
+                viewModel.checkImeEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -222,11 +252,11 @@ fun ChatScreen(
         }
     }
 
-    // Initial check on composition
     LaunchedEffect(Unit) {
-        viewModel.checkServiceStatus()
-        viewModel.checkOverlayPermission(context)
-        viewModel.checkBatteryOptimization(context)
+        while (true) {
+            viewModel.checkShizukuConnection(context)
+            kotlinx.coroutines.delay(2000)
+        }
     }
 
     // Handle back button press when fullscreen image is shown
@@ -263,7 +293,7 @@ fun ChatScreen(
                         }
                 ) {
                     Image(
-                        painter = painterResource(id = R.mipmap.ic_launcher),
+                        painter = painterResource(id = R.drawable.ic_launcher_logo),
                         contentDescription = null,
                         modifier = Modifier
                             .padding(end = 8.dp)
@@ -368,7 +398,7 @@ fun ChatScreen(
                     reverseLayout = false,
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    items(uiState.messages) { message ->
+                    items(uiState.messages, key = { it.timestamp }) { message ->
                         MessageItem(
                             message = message,
                             onShowImage = { bitmap -> fullscreenImage = bitmap }
@@ -378,6 +408,9 @@ fun ChatScreen(
             }
 
             // Input Area (Bottom)
+            val hasRequiredPermissions = uiState.shizukuConnected && uiState.imeEnabled && !uiState.missingOverlayPermission
+            val showPermissionReminder = !hasRequiredPermissions
+
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -386,7 +419,44 @@ fun ChatScreen(
                 shadowElevation = 8.dp,
                 color = Color(0xFFF5F5F5) // Very Light Gray background
             ) {
-                Row(
+                if (showPermissionReminder) {
+                    // Shizuku 未连接时，提示用户打开 Shizuku
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) {
+                                onOpenSettings()
+                            }
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Settings,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                        text = stringResource(R.string.shizuku_permission_required),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.tap_to_enable),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                } else {
+                    Row(
                     modifier = Modifier
                         .padding(horizontal = 8.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -461,12 +531,7 @@ fun ChatScreen(
                                         ) {
                                             val startJob = scope.launch(Dispatchers.Main) {
                                                 voiceResultText = ""
-                                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                                    vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
-                                                } else {
-                                                    @Suppress("DEPRECATION")
-                                                    vibrator.vibrate(50)
-                                                }
+                                                vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
                                                 speechRecognizerManager.startListening(
                                                     onResultCallback = { result -> voiceResultText = result },
                                                     onErrorCallback = { error -> Toast.makeText(context, error, Toast.LENGTH_SHORT).show() }
@@ -498,12 +563,7 @@ fun ChatScreen(
                                                 if (cancelled || isCancelling) {
                                                     speechRecognizerManager.cancel()
                                                 } else {
-                                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                                        vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
-                                                    } else {
-                                                        @Suppress("DEPRECATION")
-                                                        vibrator.vibrate(50)
-                                                    }
+                                                    vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
                                                     speechRecognizerManager.stopListening()
                                                     if (voiceResultText.isNotBlank()) showVoiceReview = true
                                                 }
@@ -525,39 +585,68 @@ fun ChatScreen(
                             )
                         }
                     } else {
-                        // Text Input Field
-                        TextField(
-                            value = inputText,
-                            onValueChange = { inputText = it },
-                            modifier = Modifier
-                                .weight(1f),
-                            enabled = !uiState.isRunning,
-                            placeholder = { Text(stringResource(R.string.input_placeholder), color = Color.Gray) },
-                            shape = MaterialTheme.shapes.medium,
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = Color.White,
-                                unfocusedContainerColor = Color.White,
-                                disabledContainerColor = Color.White,
-                                disabledTextColor = Color.Gray,
-                                focusedIndicatorColor = Color.Transparent,
-                                unfocusedIndicatorColor = Color.Transparent
-                            ),
-                            maxLines = 3
-                        )
+                        val inputBlocked = !hasRequiredPermissions
+                        Box(modifier = Modifier.weight(1f)) {
+                            TextField(
+                                value = inputText,
+                                onValueChange = { inputText = it },
+                                modifier = Modifier
+                                    .fillMaxWidth(),
+                                enabled = !uiState.isRunning && !inputBlocked,
+                                placeholder = { Text(stringResource(R.string.input_placeholder), color = Color.Gray) },
+                                shape = MaterialTheme.shapes.medium,
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = Color.White,
+                                    unfocusedContainerColor = Color.White,
+                                    disabledContainerColor = Color.White,
+                                    disabledTextColor = Color.Gray,
+                                    focusedIndicatorColor = Color.Transparent,
+                                    unfocusedIndicatorColor = Color.Transparent
+                                ),
+                                maxLines = 3
+                            )
+                            if (inputBlocked) {
+                                Surface(
+                                    modifier = Modifier.matchParentSize(),
+                                    color = Color(0x33FFFFFF),
+                                    shape = MaterialTheme.shapes.medium
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(horizontal = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.error_shizuku_no_text_input),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        TextButton(onClick = onOpenSettings) {
+                                            Text(stringResource(R.string.settings_title))
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // Send Button
-                    val isInputValid by remember(inputText) { derivedStateOf { inputText.isNotBlank() } }
+                    val isInputValid = inputText.isNotBlank()
+                    val canSend = !uiState.isRunning && hasRequiredPermissions && isInputValid
                     IconButton(
                         onClick = {
                             viewModel.sendMessage(inputText)
                             inputText = ""
                         },
-                        enabled = !uiState.isRunning && isInputValid
+                        enabled = canSend
                     ) {
                         Surface(
                             shape = MaterialTheme.shapes.extraLarge,
-                            color = if (isInputValid)
+                            color = if (canSend)
                                 MaterialTheme.colorScheme.primary else Color.Gray,
                             modifier = Modifier.size(40.dp)
                         ) {
@@ -569,6 +658,7 @@ fun ChatScreen(
                             )
                         }
                     }
+                }
                 }
             }
         }
@@ -596,7 +686,7 @@ fun ChatScreen(
                 },
                 onSend = {
                     if (voiceResultText.isNotBlank()) {
-                        viewModel.sendMessage(voiceResultText)
+                        viewModel.sendMessage(voiceResultText, isVoiceInput = true)
                     }
                     showVoiceReview = false
                     voiceResultText = ""
@@ -605,8 +695,8 @@ fun ChatScreen(
         }
 
         // Error / Service Check Overlay (Topmost)
-        // Error / Service Check Overlay (Topmost)
-        if (uiState.error != null || uiState.missingAccessibilityService || uiState.missingOverlayPermission) {
+        // Note: Accessibility service reminder is now shown in input area when Shizuku is not connected
+        if (uiState.error != null) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -622,79 +712,6 @@ fun ChatScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     LanguageSwitchButton()
-                    if (uiState.missingAccessibilityService) {
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 32.dp),
-                            color = MaterialTheme.colorScheme.errorContainer,
-                            shape = MaterialTheme.shapes.medium,
-                            shadowElevation = 8.dp
-                        ) {
-                            Box(modifier = Modifier.fillMaxWidth()) {
-                                Column(
-                                    modifier = Modifier.padding(24.dp).fillMaxWidth(),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Text(
-                                        text = stringResource(R.string.accessibility_error),
-                                        color = MaterialTheme.colorScheme.onErrorContainer,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                    Spacer(modifier = Modifier.height(16.dp))
-                                    Button(
-                                        onClick = {
-                                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                            context.startActivity(intent)
-                                        }
-                                    ) {
-                                        Text(stringResource(R.string.enable_action))
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if (uiState.missingOverlayPermission) {
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 32.dp),
-                            color = MaterialTheme.colorScheme.errorContainer,
-                            shape = MaterialTheme.shapes.medium,
-                            shadowElevation = 8.dp
-                        ) {
-                            Box(modifier = Modifier.fillMaxWidth()) {
-                                Column(
-                                    modifier = Modifier.padding(24.dp).fillMaxWidth(),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Text(
-                                        text = stringResource(R.string.overlay_error),
-                                        color = MaterialTheme.colorScheme.onErrorContainer,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                    Spacer(modifier = Modifier.height(16.dp))
-                                    Button(
-                                        onClick = {
-                                            val intent = Intent(
-                                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                                Uri.parse("package:${context.packageName}")
-                                            )
-                                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                            context.startActivity(intent)
-                                        }
-                                    ) {
-                                        Text(stringResource(R.string.grant_action))
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     if (uiState.error != null) {
                         Surface(
                             modifier = Modifier
@@ -723,6 +740,7 @@ fun ChatScreen(
                             }
                         }
                     }
+
                 }
             }
         }

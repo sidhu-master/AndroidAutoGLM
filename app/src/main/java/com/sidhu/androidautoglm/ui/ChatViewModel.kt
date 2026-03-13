@@ -14,15 +14,16 @@ import com.sidhu.androidautoglm.network.ContentItem
 import com.sidhu.androidautoglm.network.ImageUrl
 import com.sidhu.androidautoglm.network.Message
 import com.sidhu.androidautoglm.network.ModelClient
-import com.sidhu.androidautoglm.AutoGLMService
+import com.sidhu.androidautoglm.AutoGLMShizukuService
 import com.sidhu.androidautoglm.R
 import com.sidhu.androidautoglm.utils.AppStateTracker
 import com.sidhu.androidautoglm.utils.DisplayUtils
+import com.sidhu.androidautoglm.utils.ShizukuHelper
+import com.sidhu.androidautoglm.utils.ActionManager
 import com.sidhu.androidautoglm.data.TaskEndState
 import com.sidhu.androidautoglm.data.entity.Conversation as DbConversation
 import java.text.SimpleDateFormat
 import java.util.Date
-import android.os.Build
 import android.provider.Settings
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -40,16 +41,16 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.withContext
-
-import android.content.ComponentName
-import android.text.TextUtils
+import kotlinx.coroutines.channels.Channel
 
 import com.sidhu.androidautoglm.BuildConfig
 import com.sidhu.androidautoglm.data.AppDatabase
 import com.sidhu.androidautoglm.data.ImageStorage
+import com.sidhu.androidautoglm.memory.MemoryManager
 import com.sidhu.androidautoglm.data.repository.ConversationRepository
 import com.sidhu.androidautoglm.ui.model.toUiMessages
 import com.sidhu.androidautoglm.ui.model.FormattedContent
+import com.sidhu.androidautoglm.ui.model.toFormattedContent
 import com.sidhu.androidautoglm.usecase.ConversationUseCase
 
 /**
@@ -61,21 +62,44 @@ data class ChatUiState(
     val isLoading: Boolean = false,
     val isRunning: Boolean = false,
     val error: String? = null,
-    val missingAccessibilityService: Boolean = false,
     val missingOverlayPermission: Boolean = false,
     val missingBatteryExemption: Boolean = false,
+    val imeEnabled: Boolean = false,
+    val shizukuConnected: Boolean = false,
     val apiKey: String = "",
     val baseUrl: String = "https://open.bigmodel.cn/api/paas/v4",
     val isGemini: Boolean = false,
     val modelName: String = "autoglm-phone",
     val activeConversationId: Long? = null,
-    val currentConversation: DbConversation? = null
+    val currentConversation: DbConversation? = null,
+    // Master model (planning): task list, dispatch，默认 MiniMax-M2.5，API Key 从 local.properties 的 MINIMAX_API_KEY 读取
+    val masterApiKey: String = "",
+    val masterBaseUrl: String = "https://api.minimaxi.com/v1",
+    val masterIsGemini: Boolean = false,
+    val masterModelName: String = "MiniMax-M2.5",
+    // Sub model (execution): Tap, Launch, etc. 默认使用 autoglm-phone，不勾选则独立配置
+    val subUseMasterConfig: Boolean = false,
+    val subApiKey: String = "",
+    val subBaseUrl: String = "https://open.bigmodel.cn/api/paas/v4",
+    val subIsGemini: Boolean = false,
+    val subModelName: String = "autoglm-phone"
 ) {
     // Convenience properties for grouping related state
     val taskState: TaskState get() = TaskState(isRunning, isLoading, error)
     val conversationState: ConversationState get() = ConversationState(activeConversationId, currentConversation, messages)
-    val permissionState: PermissionState get() = PermissionState(missingAccessibilityService, missingOverlayPermission, missingBatteryExemption)
-    val settingsState: SettingsState get() = SettingsState(apiKey, baseUrl, isGemini, modelName)
+    val permissionState: PermissionState get() = PermissionState(missingOverlayPermission, missingBatteryExemption)
+    val settingsState: SettingsState get() = SettingsState(
+        apiKey, baseUrl, isGemini, modelName,
+        masterApiKey, masterBaseUrl, masterIsGemini, masterModelName,
+        subUseMasterConfig, subApiKey, subBaseUrl, subIsGemini, subModelName
+    )
+
+    /** Effective sub model config: master config if subUseMasterConfig else sub config */
+    val effectiveSubConfig: SubConfig get() = if (subUseMasterConfig) {
+        SubConfig(masterApiKey, masterBaseUrl, masterIsGemini, masterModelName)
+    } else {
+        SubConfig(subApiKey, subBaseUrl, subIsGemini, subModelName)
+    }
 
     // Helper methods for updating nested state
     fun withTaskState(update: TaskState.() -> TaskState): ChatUiState {
@@ -99,7 +123,6 @@ data class ChatUiState(
     fun withPermissionState(update: PermissionState.() -> PermissionState): ChatUiState {
         val newPermState = permissionState.update()
         return copy(
-            missingAccessibilityService = newPermState.missingAccessibilityService,
             missingOverlayPermission = newPermState.missingOverlayPermission,
             missingBatteryExemption = newPermState.missingBatteryExemption
         )
@@ -128,7 +151,6 @@ data class ConversationState(
  * Permission-related state
  */
 data class PermissionState(
-    val missingAccessibilityService: Boolean = false,
     val missingOverlayPermission: Boolean = false,
     val missingBatteryExemption: Boolean = false
 )
@@ -140,7 +162,24 @@ data class SettingsState(
     val apiKey: String = "",
     val baseUrl: String = "https://open.bigmodel.cn/api/paas/v4",
     val isGemini: Boolean = false,
-    val modelName: String = "autoglm-phone"
+    val modelName: String = "autoglm-phone",
+    val masterApiKey: String = "",
+    val masterBaseUrl: String = "https://api.minimaxi.com/v1",
+    val masterIsGemini: Boolean = false,
+    val masterModelName: String = "MiniMax-M2.5",
+    val subUseMasterConfig: Boolean = false,
+    val subApiKey: String = "",
+    val subBaseUrl: String = "https://open.bigmodel.cn/api/paas/v4",
+    val subIsGemini: Boolean = false,
+    val subModelName: String = "autoglm-phone"
+)
+
+/** Effective config for sub model (apiKey, baseUrl, isGemini, modelName) */
+data class SubConfig(
+    val apiKey: String,
+    val baseUrl: String,
+    val isGemini: Boolean,
+    val modelName: String
 )
 
 data class UiMessage(
@@ -162,6 +201,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         Triple(message.role, message.content, message.timestamp)
 
     private var modelClient: ModelClient? = null
+    private var masterModelClient: ModelClient? = null
+    private var subModelClient: ModelClient? = null
 
     private val prefs by lazy {
         getApplication<Application>().getSharedPreferences("app_settings", Context.MODE_PRIVATE)
@@ -184,37 +225,91 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val preferencesManager by lazy {
         com.sidhu.androidautoglm.data.preferences.PreferencesManager(getApplication())
     }
+    private val memoryManager by lazy { MemoryManager(getApplication()) }
 
     init {
-        // Load API Key: Prefer saved key, fallback to BuildConfig default
+        // Load config: support legacy (single model) and new (master/sub) structure
         val savedKeyRaw = prefs.getString("api_key", "") ?: ""
         val savedKey = if (savedKeyRaw.isNotBlank()) savedKeyRaw else BuildConfig.DEFAULT_API_KEY
-        
         val savedBaseUrl = prefs.getString("base_url", "https://open.bigmodel.cn/api/paas/v4") ?: "https://open.bigmodel.cn/api/paas/v4"
         val savedIsGemini = prefs.getBoolean("is_gemini", false)
         val savedModelName = prefs.getString("model_name", "autoglm-phone") ?: "autoglm-phone"
-        
+
+        // Master config: 默认 MiniMax-M2.5，API Key 从 local.properties 的 MINIMAX_API_KEY 读取
+        val hasMasterConfig = prefs.contains("master_api_key") || prefs.contains("master_base_url")
+        val masterKey = if (hasMasterConfig) (prefs.getString("master_api_key", "") ?: "").let {
+            if (it.isBlank()) BuildConfig.MINIMAX_API_KEY else it
+        } else BuildConfig.MINIMAX_API_KEY
+        val masterBaseUrl = prefs.getString("master_base_url", null) ?: "https://api.minimaxi.com/v1"
+        val masterIsGemini = prefs.getBoolean("master_is_gemini", false)
+        val masterModelName = prefs.getString("master_model_name", null) ?: "MiniMax-M2.5"
+
+        val subUseMaster = prefs.getBoolean("sub_use_master_config", false)
+        val subKey = prefs.getString("sub_api_key", null) ?: savedKey
+        val subBaseUrl = prefs.getString("sub_base_url", null) ?: savedBaseUrl
+        val subIsGemini = prefs.getBoolean("sub_is_gemini", savedIsGemini)
+        val subModelName = prefs.getString("sub_model_name", null) ?: savedModelName
+
         _uiState.value = _uiState.value.copy(
             apiKey = savedKey,
             baseUrl = savedBaseUrl,
             isGemini = savedIsGemini,
-            modelName = savedModelName
+            modelName = savedModelName,
+            masterApiKey = masterKey,
+            masterBaseUrl = masterBaseUrl,
+            masterIsGemini = masterIsGemini,
+            masterModelName = masterModelName,
+            subUseMasterConfig = subUseMaster,
+            subApiKey = subKey,
+            subBaseUrl = subBaseUrl,
+            subIsGemini = subIsGemini,
+            subModelName = subModelName
         )
 
-        if (savedKey.isNotEmpty()) {
-            modelClient = ModelClient(savedBaseUrl, savedKey, savedModelName, savedIsGemini)
+        val effectiveSub = if (subUseMaster) SubConfig(masterKey, masterBaseUrl, masterIsGemini, masterModelName)
+        else SubConfig(subKey, subBaseUrl, subIsGemini, subModelName)
+
+        if (masterKey.isNotEmpty()) {
+            masterModelClient = ModelClient(masterBaseUrl, masterKey, masterModelName, masterIsGemini)
         }
-        
-        // Observe service connection status
+        if (effectiveSub.apiKey.isNotEmpty()) {
+            subModelClient = ModelClient(effectiveSub.baseUrl, effectiveSub.apiKey, effectiveSub.modelName, effectiveSub.isGemini)
+        }
+        modelClient = subModelClient ?: masterModelClient
+
+        // Observe Shizuku service connection status
         viewModelScope.launch {
-            AutoGLMService.serviceInstance.collect { service ->
+            AutoGLMShizukuService.serviceInstance.collect { service ->
                 if (service != null) {
-                    // Service connected, clear error if it was about accessibility
-                    val currentError = _uiState.value.error
-                    if (currentError != null && (currentError.contains("无障碍服务") || currentError.contains("Accessibility Service"))) {
-                        _uiState.value = _uiState.value.copy(error = null)
-                    }
+                    // Set ActionExecutor for Shizuku mode
+                    ActionManager.setActionExecutor(ActionExecutor(service))
                 }
+            }
+        }
+
+        // Initialize ActionManager
+        ActionManager.init(getApplication())
+
+        // 收集语音命令（Shizuku 服务）
+        viewModelScope.launch {
+            AutoGLMShizukuService.voiceCommandFlow.collect { command ->
+                Log.d("ChatViewModel", "Received voice command from Shizuku (wake-up): $command")
+            val appContext = getApplication<Application>()
+            val shizukuOk = ShizukuHelper.isShizukuFullyReady(appContext)
+            val overlayOk = Settings.canDrawOverlays(appContext)
+            val imeOk = isImeEnabled(appContext)
+            _uiState.value = _uiState.value.copy(
+                shizukuConnected = shizukuOk,
+                missingOverlayPermission = !overlayOk,
+                imeEnabled = imeOk
+            )
+            if (!shizukuOk || !overlayOk || !imeOk) {
+                _uiState.value = _uiState.value.copy(
+                    error = getApplication<Application>().getString(R.string.error_required_permissions_missing)
+                )
+                return@collect
+            }
+            sendMessage(command, isVoiceInput = true, startNewConversation = true)
             }
         }
 
@@ -276,89 +371,134 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Dynamic accessor for ActionExecutor
-    private val actionExecutor: ActionExecutor?
-        get() = AutoGLMService.getInstance()?.let { ActionExecutor(it) }
-
     // Debug Mode Flag - set to true to bypass permission checks and service requirements
-    private val DEBUG_MODE = false
+    private companion object { const val DEBUG_MODE = false }
 
     // Job to manage the current task lifecycle - allows cancellation
     private var currentTaskJob: kotlinx.coroutines.Job? = null
 
-    // Conversation history for the API
-    private val apiHistory = mutableListOf<Message>()
+    // 暂停状态：任务循环会在每次迭代开始处检查，暂停时等待用户点击继续
+    private val _isPaused = MutableStateFlow(false)
+
+    // Conversation history for the API - thread-safe (accessed from both Main and IO)
+    private val apiHistory = java.util.Collections.synchronizedList(mutableListOf<Message>())
 
     fun updateSettings(apiKey: String, baseUrl: String, isGemini: Boolean, modelName: String) {
-        val finalBaseUrl = if (baseUrl.isBlank()) {
-            if (isGemini) "https://generativelanguage.googleapis.com" else "https://open.bigmodel.cn/api/paas/v4"
-        } else baseUrl
-        
-        val finalModelName = if (modelName.isBlank()) {
-            if (isGemini) "gemini-2.0-flash-exp" else "autoglm-phone"
-        } else modelName
-        
-        // Save to SharedPreferences
+        updateSettingsFull(
+            masterApiKey = _uiState.value.masterApiKey,
+            masterBaseUrl = _uiState.value.masterBaseUrl,
+            masterIsGemini = _uiState.value.masterIsGemini,
+            masterModelName = _uiState.value.masterModelName,
+            subUseMasterConfig = _uiState.value.subUseMasterConfig,
+            subApiKey = apiKey,
+            subBaseUrl = baseUrl,
+            subIsGemini = isGemini,
+            subModelName = modelName
+        )
+    }
+
+    fun updateSettingsFull(
+        masterApiKey: String,
+        masterBaseUrl: String,
+        masterIsGemini: Boolean,
+        masterModelName: String,
+        subUseMasterConfig: Boolean,
+        subApiKey: String,
+        subBaseUrl: String,
+        subIsGemini: Boolean,
+        subModelName: String
+    ) {
+        val finalMasterBaseUrl = when {
+            masterBaseUrl.isNotBlank() -> masterBaseUrl
+            masterIsGemini -> "https://generativelanguage.googleapis.com"
+            else -> "https://api.minimaxi.com/v1"
+        }
+        val finalMasterModelName = when {
+            masterModelName.isNotBlank() -> masterModelName
+            masterIsGemini -> "gemini-2.0-flash-exp"
+            else -> "MiniMax-M2.5"
+        }
+
+        val finalSubBaseUrl = when {
+            subBaseUrl.isNotBlank() -> subBaseUrl
+            subIsGemini -> "https://generativelanguage.googleapis.com"
+            else -> "https://open.bigmodel.cn/api/paas/v4"
+        }
+        val finalSubModelName = when {
+            subModelName.isNotBlank() -> subModelName
+            subIsGemini -> "gemini-2.0-flash-exp"
+            else -> "autoglm-phone"
+        }
+
         prefs.edit().apply {
-            // If the key is the same as the default key, save empty string to indicate "use default"
-            // Or if user explicitly cleared it (empty string), it also means use default.
-            val keyToSave = if (apiKey == BuildConfig.DEFAULT_API_KEY) "" else apiKey
-            putString("api_key", keyToSave)
-            putString("base_url", finalBaseUrl)
-            putBoolean("is_gemini", isGemini)
-            putString("model_name", finalModelName)
+            putString("master_api_key", if (masterApiKey == BuildConfig.MINIMAX_API_KEY || masterApiKey == BuildConfig.DEFAULT_API_KEY) "" else masterApiKey)
+            putString("master_base_url", finalMasterBaseUrl)
+            putBoolean("master_is_gemini", masterIsGemini)
+            putString("master_model_name", finalMasterModelName)
+            putBoolean("sub_use_master_config", subUseMasterConfig)
+            putString("sub_api_key", if (subApiKey == BuildConfig.DEFAULT_API_KEY) "" else subApiKey)
+            putString("sub_base_url", finalSubBaseUrl)
+            putBoolean("sub_is_gemini", subIsGemini)
+            putString("sub_model_name", finalSubModelName)
+            putString("api_key", if (subApiKey == BuildConfig.DEFAULT_API_KEY) "" else subApiKey)
+            putString("base_url", finalSubBaseUrl)
+            putBoolean("is_gemini", subIsGemini)
+            putString("model_name", finalSubModelName)
             apply()
         }
 
-        // Update UI State
-        // IMPORTANT: In UI State, we must reflect the ACTUAL usable key (Default or Custom), 
-        // not the empty string from storage, so that SettingsScreen can detect it matches DEFAULT_API_KEY.
-        val effectiveKey = if (apiKey.isBlank()) BuildConfig.DEFAULT_API_KEY else apiKey
-        
+        val effectiveMasterKey = if (masterApiKey.isBlank()) BuildConfig.MINIMAX_API_KEY else masterApiKey
+        val effectiveSubKey = if (subUseMasterConfig) effectiveMasterKey
+        else (if (subApiKey.isBlank()) BuildConfig.DEFAULT_API_KEY else subApiKey)
+        val effectiveSubBaseUrl = if (subUseMasterConfig) finalMasterBaseUrl else finalSubBaseUrl
+        val effectiveSubModelName = if (subUseMasterConfig) finalMasterModelName else finalSubModelName
+        val effectiveSubIsGemini = if (subUseMasterConfig) masterIsGemini else subIsGemini
+
         _uiState.value = _uiState.value.copy(
-            apiKey = effectiveKey,
-            baseUrl = finalBaseUrl,
-            isGemini = isGemini,
-            modelName = finalModelName,
-            error = null // Clear any previous errors
+            masterApiKey = effectiveMasterKey,
+            masterBaseUrl = finalMasterBaseUrl,
+            masterIsGemini = masterIsGemini,
+            masterModelName = finalMasterModelName,
+            subUseMasterConfig = subUseMasterConfig,
+            subApiKey = if (subUseMasterConfig) effectiveMasterKey else subApiKey,
+            subBaseUrl = finalSubBaseUrl,
+            subIsGemini = subIsGemini,
+            subModelName = finalSubModelName,
+            apiKey = effectiveSubKey,
+            baseUrl = effectiveSubBaseUrl,
+            isGemini = effectiveSubIsGemini,
+            modelName = effectiveSubModelName,
+            error = null
         )
 
-        // Re-initialize ModelClient
-        if (effectiveKey.isNotEmpty()) {
-            modelClient = ModelClient(finalBaseUrl, effectiveKey, finalModelName, isGemini)
+        if (effectiveMasterKey.isNotEmpty()) {
+            masterModelClient = ModelClient(finalMasterBaseUrl, effectiveMasterKey, finalMasterModelName, masterIsGemini)
         }
+        if (effectiveSubKey.isNotEmpty()) {
+            subModelClient = ModelClient(effectiveSubBaseUrl, effectiveSubKey, effectiveSubModelName, effectiveSubIsGemini)
+        }
+        modelClient = subModelClient ?: masterModelClient
     }
 
     fun updateApiKey(apiKey: String) {
-        // Deprecated, use updateSettings instead but keeping for compatibility if needed temporarily
         updateSettings(apiKey, _uiState.value.baseUrl, _uiState.value.isGemini, _uiState.value.modelName)
     }
 
-    fun checkServiceStatus() {
-        val context = getApplication<Application>()
-        if (isAccessibilityServiceEnabled(context, AutoGLMService::class.java)) {
-            _uiState.value = _uiState.value.copy(missingAccessibilityService = false)
-            val currentError = _uiState.value.error
-            if (currentError != null && (currentError.contains("无障碍服务") || currentError.contains("Accessibility Service"))) {
-                _uiState.value = _uiState.value.copy(error = null)
-            }
-        } else {
-             _uiState.value = _uiState.value.copy(missingAccessibilityService = true)
-        }
-    }
+    private fun ensureModelClients() {
+        val s = _uiState.value
+        val masterKey = if (s.masterApiKey.isBlank()) BuildConfig.MINIMAX_API_KEY else s.masterApiKey
+        val effectiveSub = s.effectiveSubConfig
+        val subKey = if (effectiveSub.apiKey.isBlank()) BuildConfig.DEFAULT_API_KEY else effectiveSub.apiKey
 
-    private fun isAccessibilityServiceEnabled(context: Context, serviceClass: Class<*>): Boolean {
-        val expectedComponentName = ComponentName(context, serviceClass)
-        val enabledServicesSetting = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
-        val colonSplitter = TextUtils.SimpleStringSplitter(':')
-        colonSplitter.setString(enabledServicesSetting)
-        while (colonSplitter.hasNext()) {
-            val componentNameString = colonSplitter.next()
-            val enabledComponent = ComponentName.unflattenFromString(componentNameString)
-            if (enabledComponent != null && enabledComponent == expectedComponentName)
-                return true
+        if (masterModelClient == null && masterKey.isNotEmpty()) {
+            masterModelClient = ModelClient(s.masterBaseUrl, masterKey, s.masterModelName, s.masterIsGemini)
+            Log.d("AutoGLM_Debug", "masterModelClient initialized")
         }
-        return false
+        if (subModelClient == null && subKey.isNotEmpty()) {
+            subModelClient = ModelClient(effectiveSub.baseUrl, subKey, effectiveSub.modelName, effectiveSub.isGemini)
+            Log.d("AutoGLM_Debug", "subModelClient initialized")
+        }
+        modelClient = subModelClient ?: masterModelClient
     }
 
     fun checkOverlayPermission(context: Context) {
@@ -374,14 +514,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun checkBatteryOptimization(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-            val packageName = context.packageName
-            val isIgnoring = powerManager.isIgnoringBatteryOptimizations(packageName)
-            _uiState.value = _uiState.value.copy(missingBatteryExemption = !isIgnoring)
-        } else {
-            _uiState.value = _uiState.value.copy(missingBatteryExemption = false)
-        }
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        val packageName = context.packageName
+        val isIgnoring = powerManager.isIgnoringBatteryOptimizations(packageName)
+        _uiState.value = _uiState.value.copy(missingBatteryExemption = !isIgnoring)
+    }
+
+    fun checkShizukuConnection(context: Context) {
+        val isShizukuConnected = ShizukuHelper.isShizukuFullyReady(context)
+        _uiState.value = _uiState.value.copy(shizukuConnected = isShizukuConnected)
+    }
+
+    fun checkImeEnabled(context: Context) {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+        val enabled = imm?.enabledInputMethodList?.any { it.packageName == context.packageName } == true
+        _uiState.value = _uiState.value.copy(imeEnabled = enabled)
+    }
+
+    private fun isImeEnabled(context: Context): Boolean {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+        return imm?.enabledInputMethodList?.any { it.packageName == context.packageName } == true
     }
 
     fun clearError() {
@@ -398,11 +550,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         // Notify floating window controller that task is no longer running
         // This ensures isTaskRunning flag is properly synchronized before dismissal
-        val service = AutoGLMService.getInstance()
-        service?.floatingWindowController?.setTaskRunning(false)
+        ActionManager.setTaskRunning(false)
 
         // Note: The floating window will be dismissed by the UI layer (FloatingWindowContent.kt)
         // which also launches the main app after the window is fully hidden
+    }
+
+    /** 暂停任务（循环会在每次迭代开始处等待） */
+    private fun pauseTask() {
+        _isPaused.value = true
+        ActionManager.setPaused(true)
+        ActionManager.updateStatus(getApplication<Application>().getString(R.string.status_paused))
+    }
+
+    /** 继续任务 */
+    private fun resumeTask() {
+        _isPaused.value = false
+        ActionManager.setPaused(false)
+        ActionManager.updateStatus(getApplication<Application>().getString(R.string.status_thinking))
     }
 
     fun clearMessages() {
@@ -425,94 +590,50 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // _uiState.value = _uiState.value.copy(messages = listOf(UiMessage("assistant", getApplication<Application>().getString(R.string.welcome_message))))
     }
 
-    fun sendMessage(text: String) {
-        Log.d("AutoGLM_Trace", "sendMessage called with text: $text")
+    fun sendMessage(text: String, isVoiceInput: Boolean = false, startNewConversation: Boolean = false) {
+        Log.d("AutoGLM_Trace", "sendMessage called with text: $text, isVoiceInput=$isVoiceInput, startNewConversation=$startNewConversation")
         // Skip blank check
         if (text.isBlank()) return
         
-        com.sidhu.autoinput.KeyboardScanner.setDebugEnabled(BuildConfig.AUTO_INPUT_DEV_MODE)
+        ensureModelClients()
 
-        if (BuildConfig.AUTO_INPUT_DEV_MODE) {
-            val service = AutoGLMService.getInstance()
-            if (service != null) {
-                viewModelScope.launch {
-                    Log.d("AutoGLM_Debug", "DEBUG_INPUT: Testing visual keyboard input with: $text")
-                    _uiState.value = _uiState.value.copy(isLoading = true)
-                    try {
-                        // Ensure conversation exists for debug logs
-                        val conversationId = _uiState.value.activeConversationId ?: conversationUseCase.createConversation().also { 
-                            _uiState.value = _uiState.value.copy(activeConversationId = it)
-                        }
-
-                        val textInputHandler = com.sidhu.androidautoglm.action.TextInputHandler(service)
-                        
-                        // Add debug listener to post screenshots to chat
-                        textInputHandler.setDebugListener { bitmap, info ->
-                            viewModelScope.launch {
-                                 repository.saveAssistantMessage(
-                                     conversationId,
-                                     "Keyboard Debug:\n$info",
-                                     bitmap
-                                 )
-                            }
-                        }
-
-                        val success = textInputHandler.inputText(text)
-                        Log.d("AutoGLM_Debug", "DEBUG_INPUT: Visual input result: $success")
-                    } catch (e: Exception) {
-                        Log.e("AutoGLM_Debug", "DEBUG_INPUT: Error: ${e.message}", e)
-                    } finally {
-                        _uiState.value = _uiState.value.copy(isLoading = false)
-                    }
+        // 语音唤醒启动的任务放入新会话
+        if (startNewConversation) {
+            viewModelScope.launch {
+                val newId = conversationUseCase.createConversation()
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(
+                        activeConversationId = newId,
+                        messages = emptyList()
+                    )
+                    preferencesManager.saveCurrentConversationId(newId)
                 }
-            } else {
-                Log.e("AutoGLM_Debug", "DEBUG_INPUT: Service not available")
+                doSendMessage(text, isVoiceInput)
             }
             return
         }
+        doSendMessage(text, isVoiceInput)
+    }
 
-        if (modelClient == null) {
-            Log.d("AutoGLM_Trace", "modelClient is null, initializing...")
-            // Try to init with current state if not init
-             modelClient = ModelClient(
-                 _uiState.value.baseUrl,
-                 _uiState.value.apiKey,
-                 _uiState.value.modelName,
-                 _uiState.value.isGemini
-             )
-             Log.d("AutoGLM_Debug", "modelClient initialized. isGemini: ${_uiState.value.isGemini}")
-        } else {
-             Log.d("AutoGLM_Debug", "modelClient already initialized")
-        }
+    private fun doSendMessage(text: String, isVoiceInput: Boolean) {
 
-        if (_uiState.value.apiKey.isBlank()) {
+        val effectiveSub = _uiState.value.effectiveSubConfig
+        val masterKey = if (_uiState.value.masterApiKey.isBlank()) BuildConfig.MINIMAX_API_KEY else _uiState.value.masterApiKey
+        if (effectiveSub.apiKey.isBlank() && masterKey.isBlank()) {
             Log.d("AutoGLM_Debug", "API Key is blank")
             _uiState.value = _uiState.value.copy(error = getApplication<Application>().getString(R.string.error_api_key_missing))
             return
         }
 
-        val service = AutoGLMService.getInstance()
-        Log.d("AutoGLM_Debug", "Service instance: $service, DEBUG_MODE: $DEBUG_MODE")
+        Log.d("AutoGLM_Debug", "DEBUG_MODE: $DEBUG_MODE")
+
+        // Check if we can perform actions
         if (!DEBUG_MODE) {
-            if (service == null) {
-                val context = getApplication<Application>()
-                if (isAccessibilityServiceEnabled(context, AutoGLMService::class.java)) {
-                     _uiState.value = _uiState.value.copy(error = getApplication<Application>().getString(R.string.error_service_not_connected))
-                } else {
-                     _uiState.value = _uiState.value.copy(missingAccessibilityService = true)
-                }
+            if (!ActionManager.canPerformActions()) {
+                _uiState.value = _uiState.value.copy(error = getApplication<Application>().getString(R.string.error_service_not_connected))
                 return
             }
-
-            // Check overlay permission again before starting
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(getApplication())) {
-                 _uiState.value = _uiState.value.copy(missingOverlayPermission = true)
-                 return
-            }
         }
-
-        // Create a new Job for this task - allows cancellation via stopTask()
-        currentTaskJob = kotlinx.coroutines.Job()
 
         val userTimestamp = System.currentTimeMillis()
         val pendingConversationId = _uiState.value.activeConversationId ?: -1L
@@ -534,12 +655,31 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             error = null
         )
 
-        viewModelScope.launch(Dispatchers.IO + currentTaskJob!!) {
-            Log.d("AutoGLM_Debug", "Coroutine started")
+        currentTaskJob = viewModelScope.launch(Dispatchers.IO) {
+            Log.d("AutoGLM_Debug", "Coroutine started, isVoiceInput=$isVoiceInput")
+
+            // 立即显示悬浮窗和「审查任务中」，再执行后续耗时操作
+            ActionManager.resetFloatingWindow()
+            _isPaused.value = false
+            ActionManager.showFloatingWindow(
+                onStop = { stopTask() },
+                isRunning = true,
+                onPauseResume = { if (_isPaused.value) resumeTask() else pauseTask() }
+            )
+            // 等待悬浮窗控制器就绪（Shizuku 模式下异步创建），再更新状态
+            // 任务清单等主AI审查完成后再更新，避免先显示原始语音再替换
+            delay(120)
+            ActionManager.updateStatus(getApplication<Application>().getString(R.string.status_reviewing_task))
+
+            val isAppInForeground = if (DEBUG_MODE) false else AppStateTracker.isAppInForeground(getApplication())
+            if (isAppInForeground) {
+                ActionManager.goHome()
+            }
 
             // Refresh app mapping before each request
             AppMapper.refreshLauncherApps()
 
+            val isExistingConversation = _uiState.value.activeConversationId != null
             val ensuredConversationId = _uiState.value.activeConversationId ?: run {
                 val createdId = conversationUseCase.createConversation()
                 withContext(Dispatchers.Main) {
@@ -558,91 +698,108 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // Start new conversation with system prompt
-            Log.d("AutoGLM_Debug", "Starting new conversation history")
+            // 纯子AI：系统提示 + 截图直送，模型输出 element=[x,y] 坐标
+            // 新建会话不带历史记忆；同一会话内（如悬浮窗语音续发）带上本次会话记忆
+            Log.d("AutoGLM_Debug", "Starting new conversation history (sub-AI only)")
             apiHistory.clear()
-            // Add System Prompt with Date matching Python logic
+
             val dateFormat = SimpleDateFormat("yyyy年MM月dd日 EEEE", Locale.getDefault())
             val dateStr = getApplication<Application>().getString(R.string.prompt_date_prefix) + dateFormat.format(Date())
-            apiHistory.add(Message("system", dateStr + "\n" + ModelClient.SYSTEM_PROMPT))
+            val sessionMemory = if (isExistingConversation) memoryManager.loadTodayAndYesterdayMemory() else ""
+            val systemContent = buildString {
+                append(dateStr).append("\n").append(ModelClient.SYSTEM_PROMPT)
+                if (sessionMemory.isNotBlank()) {
+                    append("\n\n【本会话记忆】\n").append(sessionMemory)
+                }
+            }
+            apiHistory.add(Message("system", systemContent))
 
             var currentPrompt = text
             var step = 0
-            val maxSteps = 20
+            val maxSteps = 100
+            val summarizeInterval = 5
+            // Note 缓冲区：记录页面截图，供 Call_API 总结
+            val noteBuffer = mutableListOf<Bitmap>()
+            // Call_API 异步总结完成后的结果，下次迭代注入
+            val callApiSummaryChannel = Channel<String>(1)
 
-            // Check if app is in foreground (used for both goHome and screenshot decisions)
-            val isAppInForeground = if (DEBUG_MODE) false else AppStateTracker.isAppInForeground(getApplication())
             Log.d("AutoGLM_Trace", "App in foreground: $isAppInForeground")
 
-            if (!DEBUG_MODE && service != null) {
-                // Reset floating window state for new task
-                service.resetFloatingWindowForNewTask()
-
-                withContext(Dispatchers.Main) {
-                    // Only go home if this app is in the foreground
-                    if (isAppInForeground) {
-                        Log.d("AutoGLM_Trace", "App is in foreground, executing goHome()")
-                        service.goHome()
-                    } else {
-                        Log.d("AutoGLM_Trace", "App not in foreground, skipping goHome()")
-                    }
-                }
-
-                // Show floating window and wait for layout completion
-                // This is more reliable than blind delay - uses OnGlobalLayoutListener callback
-                Log.d("AutoGLM_Trace", "Showing floating window and waiting for layout")
-                service.showFloatingWindowAndWait(
-                    onStop = { stopTask() },
-                    isRunning = true
-                )
+            var isFinished = false
+            val client = modelClient
+            if (client == null) {
+                postError("请先在设置中配置子模型 API")
+                return@launch
             }
 
-            var isFinished = false
+            // 主模型审查任务：纠错字、整理、根据本机应用选择目标 App
+            val masterClient = masterModelClient
+            if (masterClient != null && text.isNotBlank()) {
+                val installedApps = AppMapper.getInstalledAppNamesForPrompt()
+                val refined = reviewTask(masterClient, text, installedApps)
+                if (refined != null && !refined.startsWith("Error") && refined.isNotBlank()) {
+                    currentPrompt = stripThinkTags(refined).trim()
+                    if (currentPrompt.isNotEmpty()) {
+                        Log.d("AutoGLM_Debug", "Task reviewed: $text -> $currentPrompt")
+                    }
+                }
+            }
+            ActionManager.updateTaskList(listOf(stripThinkTags(currentPrompt).takeIf { it.isNotEmpty() } ?: currentPrompt))
 
             try {
-                while (isActive && step < maxSteps) {
+                loop@ while (isActive && step < maxSteps) {
+                    // 等待暂停恢复（手动暂停或 Take_over/Interact 自动暂停）
+                    while (_isPaused.value) {
+                        delay(200)
+                        ensureActive()
+                    }
                     step++
                     Log.d("AutoGLM_Debug", "Step: $step")
 
-                    if (!DEBUG_MODE && service != null) {
-                        service.updateFloatingStatus(getApplication<Application>().getString(R.string.status_thinking))
-                    }
-
-                    // 1. Take Screenshot
-                    // Skip screenshot on first step if the request was initiated from our own app
-                    val screenshot = if (step == 1 && isAppInForeground) {
-                        Log.d("AutoGLM_Debug", "Step 1: Skipping screenshot (app in foreground)")
-                        null
-                    } else {
-                        Log.d("AutoGLM_Debug", "Taking screenshot for step $step...")
-                        if (DEBUG_MODE) {
-                            Bitmap.createBitmap(1080, 2400, Bitmap.Config.ARGB_8888)
-                        } else {
-                            service?.takeScreenshot()
+                    // 注入上次 Call_API 异步完成的总结：替换被总结部分，不阻塞子模型
+                    callApiSummaryChannel.tryReceive().getOrNull()?.let { payload ->
+                        val sep = payload.indexOf('|')
+                        if (sep > 0) {
+                            val sizeAtCallApi = payload.substring(0, sep).toIntOrNull() ?: 0
+                            val summary = payload.substring(sep + 1)
+                            synchronized(apiHistory) {
+                                if (sizeAtCallApi > 1 && apiHistory.size >= sizeAtCallApi) {
+                                    for (i in sizeAtCallApi - 1 downTo 1) {
+                                        apiHistory.removeAt(i)
+                                    }
+                                    apiHistory.add(1, Message("user", "【页面总结】$summary\n\n请根据总结继续执行下一步。"))
+                                    Log.d("AutoGLM_Debug", "Call_API: 已替换被总结部分并注入")
+                                }
+                            }
                         }
                     }
 
-                    // Check screenshot failure (only if we expected to take one)
-                    if (screenshot == null && !(step == 1 && isAppInForeground)) {
+                    ActionManager.updateStatus(getApplication<Application>().getString(R.string.status_thinking))
+
+                    // 1. Take Screenshot（截图前显示「进行界面截图」，等待 UI 渲染后再截图）
+                    val screenshotStatus = getApplication<Application>().getString(R.string.status_screenshot_taking)
+                    ActionManager.updateStatus(screenshotStatus)
+                    ActionManager.updateThinking(screenshotStatus)
+                    delay(80)   // 等待状态文字渲染后再截图，缩短隐藏前等待
+                    Log.d("AutoGLM_Debug", "Taking screenshot for step $step...")
+                    val screenshot = if (DEBUG_MODE) {
+                        Bitmap.createBitmap(1080, 2400, Bitmap.Config.ARGB_8888)
+                    } else {
+                        ActionManager.takeScreenshot()
+                    }
+
+                    if (screenshot == null) {
                         Log.e("AutoGLM_Debug", "Screenshot failed")
                         postError(getApplication<Application>().getString(R.string.error_screenshot_failed))
                         break
                     }
 
-                    // Log screenshot success
-                    if (screenshot != null) {
-                        Log.d("ChatViewModel", "Screenshot size: ${screenshot.width}x${screenshot.height}")
-                    }
-
-                    // 2. Get screen dimensions for ActionParser coordinate system
                     val screenWidth = if (DEBUG_MODE) 1080 else DisplayUtils.getScreenWidth(getApplication())
                     val screenHeight = if (DEBUG_MODE) 2400 else DisplayUtils.getScreenHeight(getApplication())
-                    Log.d("ChatViewModel", "Screen size: ${screenWidth}x${screenHeight}")
+                    val currentApp = if (DEBUG_MODE) "DebugApp" else (ActionManager.getCurrentApp().ifBlank { "Unknown" })
 
-                    // 3. Build User Message
-                    val currentApp = if (DEBUG_MODE) "DebugApp" else (service?.currentApp?.value ?: "Unknown")
+                    // 2. Build User Message: 图片 + 文本（子AI 直接看图）
                     val screenInfo = "{\"current_app\": \"$currentApp\"}"
-
                     val textPrompt = if (step == 1) {
                         "$currentPrompt\n\n$screenInfo"
                     } else {
@@ -650,23 +807,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     val userContentItems = mutableListOf<ContentItem>()
-                    // Only add image if we have a screenshot (subsequent steps)
-                    if (screenshot != null) {
-                        // Doubao/OpenAI vision models often prefer Image first, then Text
-                        userContentItems.add(ContentItem("image_url", imageUrl = ImageUrl("data:image/jpeg;base64,${ModelClient.bitmapToBase64(screenshot)}")))
-                    }
+                    userContentItems.add(ContentItem("image_url", imageUrl = ImageUrl("data:image/jpeg;base64,${ModelClient.bitmapToBase64(screenshot)}")))
                     userContentItems.add(ContentItem("text", text = textPrompt))
+                    apiHistory.add(Message("user", userContentItems))
 
-                    val userMessage = Message("user", userContentItems)
-                    apiHistory.add(userMessage)
-
-                    // Get conversation ID for database operations
                     val conversationId = _uiState.value.activeConversationId
 
-                    // 3. Call API
-                    Log.d("AutoGLM_Debug", "Sending request to ModelClient...")
-                    val responseText = modelClient?.sendRequest(apiHistory, screenshot) ?: "Error: Client null"
-                    // Unescape escape sequences like \n, \t, etc.
+                    // 3. Call 子AI（带图）
+                    Log.d("AutoGLM_Debug", "Sending request to sub ModelClient (step=$step, with image)...")
+                    val responseText = client.sendRequest(apiHistory, screenshot)
                     val unescapedResponseText = unescapeResponse(responseText)
                     Log.d("AutoGLM_Debug", "Response received: $unescapedResponseText")
 
@@ -676,26 +825,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         break
                     }
 
-                    // Parse response parts for display
-                    val (thinking, _) = ActionParser.parseResponsePartsToParsedAction(unescapedResponseText)
-
-                    // Extract raw action string for logging and storage
+                    val (thinking, parsedAction) = ActionParser.parseResponsePartsToParsedAction(unescapedResponseText)
                     val actionStr = ActionParser.extractActionString(unescapedResponseText)
 
                     Log.i("AutoGLM_Log", "\n==================================================")
-                    Log.i("AutoGLM_Log", "💭 思考过程:")
-                    Log.i("AutoGLM_Log", thinking)
-                    Log.i("AutoGLM_Log", "🎯 执行动作:")
-                    Log.i("AutoGLM_Log", actionStr)
+                    Log.i("AutoGLM_Log", "Step $step | Think: $thinking")
+                    Log.i("AutoGLM_Log", "Step $step | Action: $actionStr")
                     Log.i("AutoGLM_Log", "==================================================")
 
-                    // Add Assistant response to history
-                    apiHistory.add(Message("assistant", buildAssistantContent(thinking, actionStr)))
-                    
-                    // Save assistant message to database with screenshot
+                    val assistantContent = buildAssistantContent(thinking, actionStr)
+                    apiHistory.add(Message("assistant", assistantContent))
+
+                    // DisplayFormattedContent：同时显示思考文字和动作卡片
+                    if (parsedAction != null) {
+                        ActionManager.updateThinking(thinking)
+                        ActionManager.updateActionContent(parsedAction.toFormattedContent(getApplication()))
+                    } else {
+                        ActionManager.updateThinking(thinking)
+                    }
+
                     if (conversationId != null) {
                         try {
-                            val assistantContent = buildAssistantContent(thinking, actionStr)
                             repository.saveAssistantMessage(conversationId, assistantContent, screenshot)
                         } catch (e: Exception) {
                             Log.e("ChatViewModel", "Failed to save assistant message", e)
@@ -710,40 +860,65 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     )
 
-                    // If DEBUG_MODE, stop here after one round
                     if (DEBUG_MODE) {
-                        Log.d("AutoGLM_Debug", "DEBUG_MODE enabled, stopping after one round")
                         _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
                         break
                     }
 
-                    // 4. Parse Action from the extracted action string (not the full response)
+                    // 4. Parse Action（element 坐标格式，直接解析）
                     val action = ActionParser.parseAction(actionStr, screenWidth, screenHeight)
-                    
-                    // Update Floating Window Status with friendly description
-                    service?.updateFloatingStatus(getActionDescription(action))
+                    ActionManager.updateStatus(getActionDescription(action))
 
-                    // 5. Execute Action
-                    val executor = actionExecutor
-                    if (executor == null) {
-                         postError(getApplication<Application>().getString(R.string.error_executor_null))
-                         break
+                    // 4.5 Note / Call_API / Take_over / Interact：在 ChatViewModel 内处理
+                    when (action) {
+                        is Action.TakeOver, Action.Interact -> {
+                            // 需要人工干预：自动暂停，等待用户操作后点击继续
+                            pauseTask()
+                            continue@loop
+                        }
+                        is Action.Note -> {
+                            val copy = screenshot.copy(screenshot.config ?: Bitmap.Config.ARGB_8888, false)
+                            if (copy != null) {
+                                if (noteBuffer.size >= 5) noteBuffer.removeAt(0)
+                                noteBuffer.add(copy)
+                            }
+                            Log.d("AutoGLM_Debug", "Note: 已记录页面，缓冲区大小=${noteBuffer.size}")
+                            removeImagesFromHistory()
+                            delay(1000)
+                            continue@loop
+                        }
+                        is Action.CallApi -> {
+                            val masterClient = masterModelClient
+                            if (masterClient != null) {
+                                val instruction = action.instruction
+                                val historyText = buildHistoryText(apiHistory)
+                                val sizeAtCallApi = apiHistory.size
+                                viewModelScope.launch(Dispatchers.IO) {
+                                    val summary = processCallApiTextOnly(masterClient, instruction, historyText)
+                                    if (summary != null && !summary.startsWith("Error")) {
+                                        memoryManager.appendToDailyMemory("【Call_API】$summary")
+                                        callApiSummaryChannel.trySend("$sizeAtCallApi|$summary")
+                                        Log.d("AutoGLM_Debug", "Call_API: 异步总结完成，待下次请求替换注入")
+                                    }
+                                }
+                            }
+                            noteBuffer.clear()
+                            removeImagesFromHistory()
+                            delay(500)
+                            continue@loop
+                        }
+                        else -> { /* 继续执行常规 action */ }
                     }
 
-                    // ensureActive() will throw CancellationException if job was cancelled
+                    // 5. Execute Action
                     ensureActive()
-
-                    val success = executor.execute(action)
+                    val success = ActionManager.executeAction(action)
 
                     if (action is Action.Finish) {
                         isFinished = true
                         _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
-                        service?.updateFloatingStatus(getApplication<Application>().getString(R.string.action_finish))
-                        
-                        // Mark task as completed in FloatingWindowController
-                        val floatingWindow = AutoGLMService.getInstance()?.floatingWindowController
-                        floatingWindow?.markTaskCompleted()
-                        
+                        ActionManager.updateStatus(getApplication<Application>().getString(R.string.action_finish))
+                        ActionManager.markTaskCompleted()
                         updateTaskState(TaskEndState.COMPLETED, step)
                         break
                     }
@@ -754,22 +929,37 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                     removeImagesFromHistory()
 
-                    // delay() is cancellable - will respond to job cancellation
+                    // 主模型记忆管理：每 N 步摘要压缩历史，避免 token 爆炸
+                    val masterClient = masterModelClient
+                    if (masterClient != null && step % summarizeInterval == 0 && step > 0 && apiHistory.size > 4) {
+                        val summary = summarizeHistory(apiHistory)
+                        if (summary != null && !summary.startsWith("Error")) {
+                            val lastAssistant = apiHistory.lastOrNull { it.role == "assistant" }
+                            apiHistory.clear()
+                            val summarizedSystemContent = buildString {
+                                append(dateStr).append("\n").append(ModelClient.SYSTEM_PROMPT)
+                                if (sessionMemory.isNotBlank()) {
+                                    append("\n\n【本会话记忆】\n").append(sessionMemory)
+                                }
+                            }
+                            apiHistory.add(Message("system", summarizedSystemContent))
+                            apiHistory.add(Message("user", "【此前任务摘要】$summary\n\n请根据摘要继续执行下一步。"))
+                            if (lastAssistant != null) {
+                                apiHistory.add(lastAssistant)
+                            }
+                            Log.d("AutoGLM_Debug", "History summarized at step $step, context compressed")
+                        }
+                    }
+
                     delay(2000)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
-                // Task was cancelled by user - this is expected behavior
-                // DO NOT show as error - clear any error state
                 Log.d("ChatViewModel", "Task was cancelled by user")
                 _uiState.value = _uiState.value.copy(
                     isRunning = false,
                     isLoading = false,
-                    error = null  // Explicitly clear any error
+                    error = null
                 )
-                // Note: Do NOT call updateFloatingStatus() here as it creates a race condition
-                // where isTaskRunning stays true while status shows "stopped", preventing
-                // the window from hiding when app resumes. The window dismissal is handled
-                // by the FloatingWindowContent.kt stop button onClick handler.
                 updateTaskState(TaskEndState.USER_STOPPED, step)
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -787,12 +977,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.value = _uiState.value.copy(isRunning = false, isLoading = false)
                 if (!DEBUG_MODE) {
                     if (step >= maxSteps) {
-                        service?.updateFloatingStatus(getApplication<Application>().getString(R.string.error_task_terminated_max_steps))
-                        
-                        // Mark task as completed in FloatingWindowController
-                        val floatingWindow = AutoGLMService.getInstance()?.floatingWindowController
-                        floatingWindow?.markTaskCompleted()
-                        
+                        ActionManager.updateStatus(getApplication<Application>().getString(R.string.error_task_terminated_max_steps))
+                        ActionManager.markTaskCompleted()
                         updateTaskState(TaskEndState.MAX_STEPS_REACHED, step)
                     }
                 }
@@ -811,40 +997,120 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     
     private fun postError(msg: String) {
         _uiState.value = _uiState.value.copy(error = msg, isRunning = false, isLoading = false)
-        val service = AutoGLMService.getInstance()
+        val service = ActionManager.getService()
+        val context = getApplication<Application>()
 
+        // Unified error handling for all modes
         val currentPkg = service?.currentApp?.value
-        val myPkg = getApplication<Application>().packageName
+        val myPkg = context.packageName
+
         if (currentPkg == myPkg) {
-            service?.hideFloatingWindow()
+            // App is in foreground - hide floating window
+            ActionManager.hideFloatingWindow()
         } else {
-            service?.updateFloatingStatus(getApplication<Application>().getString(R.string.action_error, msg))
+            // Show error status
+            ActionManager.updateStatus(context.getString(R.string.action_error, msg))
+        }
+
+    }
+
+    /** 将 apiHistory 转为纯文本（不含图片） */
+    private fun buildHistoryText(history: List<Message>): String {
+        return buildString {
+            history.drop(1).forEach { msg ->
+                when (msg.role) {
+                    "user" -> {
+                        append("[用户] ")
+                        when (val c = msg.content) {
+                            is String -> append(c)
+                            is List<*> -> {
+                                c.filterIsInstance<ContentItem>()
+                                    .filter { it.type == "text" }
+                                    .joinTo(this) { it.text ?: "" }
+                            }
+                            else -> {}
+                        }
+                        append("\n")
+                    }
+                    "assistant" -> {
+                        append("[助手] ").append(msg.content.toString()).append("\n")
+                    }
+                    else -> {}
+                }
+            }
         }
     }
 
-    private fun removeImagesFromHistory() {
-        // Python logic: Remove images from the last user message to save context space
-        // The history is: [..., User(Image+Text), Assistant(Text)]
-        // So we look at the second to last item.
-        if (apiHistory.size < 2) return
+    /** 移除 <think> 标签及其内容，避免任务内容混入模型内部标签 */
+    private fun stripThinkTags(text: String): String {
+        return text
+            .replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("</?think>[^<]*", RegexOption.IGNORE_CASE), "")
+            .trim()
+    }
 
+    /**
+     * 主模型审查任务：纠错字、整理任务描述、根据本机应用选择目标 App。
+     * 返回整理后的任务文本，失败时返回 null。
+     */
+    private suspend fun reviewTask(masterClient: ModelClient, rawTask: String, installedApps: String = ""): String? {
+        if (rawTask.isBlank()) return null
+        val appSection = if (installedApps.isNotBlank()) {
+            "\n\n本机已安装应用：\n$installedApps\n"
+        } else ""
+        val taskReviewPrompt = memoryManager.getTaskReviewPrompt()
+        val prompt = taskReviewPrompt + appSection + "\n用户任务：\n$rawTask"
+        val history = listOf(Message("user", prompt))
+        return masterClient.sendRequest(history, null)
+    }
+
+    /**
+     * Call_API：主模型仅根据文字内容总结（不传图，不阻塞）。
+     * 总结完成后通过 Channel 注入，子模型下次请求时可见。
+     */
+    private suspend fun processCallApiTextOnly(
+        masterClient: ModelClient,
+        instruction: String,
+        historyText: String
+    ): String? {
+        if (historyText.isBlank()) return null
+        val callApiPrompt = memoryManager.getCallApiPrompt()
+        val prompt = "$callApiPrompt\n\n指令：$instruction\n\n---\n对话记录：\n$historyText"
+        val history = listOf(Message("user", prompt))
+        return masterClient.sendRequest(history, null)
+    }
+
+    /**
+     * 主模型记忆管理：将 apiHistory 摘要压缩，返回摘要文本。
+     * 用于每 N 步后压缩上下文，避免 token 爆炸。
+     */
+    private suspend fun summarizeHistory(history: List<Message>): String? {
+        val masterClient = masterModelClient ?: return null
+        val historyText = buildHistoryText(history)
+        if (historyText.isBlank()) return null
+        val summarizePrompt = memoryManager.getSummarizePrompt()
+        val summarizeHistory = listOf(
+            Message("user", "$summarizePrompt\n\n$historyText")
+        )
+        return masterClient.sendRequest(summarizeHistory, null)
+    }
+
+    /**
+     * 从历史中移除上一条用户消息的图片，仅保留文本，以节省上下文空间。
+     */
+    private fun removeImagesFromHistory() {
+        if (apiHistory.size < 2) return
         val lastUserIndex = apiHistory.size - 2
         if (lastUserIndex < 0) return
-
         val lastUserMsg = apiHistory[lastUserIndex]
         if (lastUserMsg.role == "user" && lastUserMsg.content is List<*>) {
             try {
                 @Suppress("UNCHECKED_CAST")
                 val contentList = lastUserMsg.content as List<*>
-
-                // Filter items keeping only text
                 val textOnlyList = contentList.filter { item ->
-                    (item as? com.sidhu.androidautoglm.network.ContentItem)?.type == "text"
+                    (item as? ContentItem)?.type == "text"
                 }
-
-                // Replace the message in history with the text-only version
                 apiHistory[lastUserIndex] = lastUserMsg.copy(content = textOnlyList)
-                // Log.d("ChatViewModel", "Removed image from history at index $lastUserIndex")
             } catch (e: Exception) {
                 Log.e("ChatViewModel", "Failed to remove image from history", e)
             }

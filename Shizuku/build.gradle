@@ -1,0 +1,41 @@
+plugins {
+    id("idea")
+}
+
+idea.module {
+    excludeDirs += file('out')
+}
+
+subprojects {
+    plugins.withId("com.android.base") {
+        android {
+            compileSdk = 36
+            buildToolsVersion = "36.0.0"
+            ndkVersion = "26.1.10909125"
+            defaultConfig {
+                minSdk = 24
+                targetSdk = 36
+            }
+            compileOptions {
+                sourceCompatibility = JavaVersion.VERSION_21
+                targetCompatibility = JavaVersion.VERSION_21
+            }
+        }
+    }
+}
+
+apply from: 'api/manifest.gradle'
+def mainProps = new Properties()
+def mainPropsFile = file('../gradle.properties')
+if (mainPropsFile.exists()) {
+    mainPropsFile.withInputStream { stream -> mainProps.load(stream) }
+}
+def mainVersionCodeText = (mainProps.getProperty('app.versionCode') ?: '').trim()
+def mainVersionNameText = (mainProps.getProperty('app.versionName') ?: '').trim()
+def mainVersionCode = mainVersionCodeText ? Integer.parseInt(mainVersionCodeText) : 1
+def mainVersionName = mainVersionNameText ? mainVersionNameText : '1.0.0'
+def baseVersionName = "${api_version_major}.6.0"
+ext {
+    versionCode = mainVersionCode
+    versionName = mainVersionName
+}
