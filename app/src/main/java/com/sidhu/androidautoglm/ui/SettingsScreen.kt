@@ -59,6 +59,8 @@ fun SettingsScreen(
     onWakeWordToggle: (Boolean) -> Unit,
     wakeWord: String,
     onWakeWordChange: (String) -> Unit,
+    floatingWindowMode: String = com.sidhu.androidautoglm.FloatingWindowManager.MODE_DYNAMIC_ISLAND,
+    onFloatingWindowModeChange: (String) -> Unit = {},
     // 主/子模型配置
     masterApiKey: String = "",
     masterBaseUrl: String = "https://api.minimaxi.com/v1",
@@ -410,6 +412,44 @@ fun SettingsScreen(
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
+                        }
+                    }
+                }
+
+                // 悬浮窗显示运行详情 Card（放在所有 toggle 最下方）
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.fw_show_details_title),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = stringResource(R.string.fw_show_details_desc),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = floatingWindowMode == com.sidhu.androidautoglm.FloatingWindowManager.MODE_NORMAL,
+                                onCheckedChange = { checked ->
+                                    onFloatingWindowModeChange(
+                                        if (checked) com.sidhu.androidautoglm.FloatingWindowManager.MODE_NORMAL
+                                        else com.sidhu.androidautoglm.FloatingWindowManager.MODE_DYNAMIC_ISLAND
+                                    )
+                                }
+                            )
                         }
                     }
                 }
@@ -769,6 +809,8 @@ fun SettingsScreenPreview() {
         onWakeWordToggle = {},
         wakeWord = "皮皮虾",
         onWakeWordChange = {},
+        floatingWindowMode = com.sidhu.androidautoglm.FloatingWindowManager.MODE_DYNAMIC_ISLAND,
+        onFloatingWindowModeChange = {},
         masterApiKey = "",
         masterBaseUrl = "https://api.minimaxi.com/v1",
         masterIsGemini = false,

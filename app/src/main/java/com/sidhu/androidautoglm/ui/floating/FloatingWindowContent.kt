@@ -13,6 +13,13 @@ import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -31,6 +38,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
@@ -41,6 +49,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -59,7 +68,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -80,6 +94,52 @@ import com.sidhu.androidautoglm.ui.model.FormattedContent
 import com.sidhu.androidautoglm.action.ActionType
 import kotlin.math.roundToInt
 
+/** 交叉轨道旋转图标（灵动岛模式用） */
+@Composable
+private fun CrossedOrbitIcon(
+    modifier: Modifier = Modifier,
+    color: Color
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "orbit_icon")
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "rotation"
+    )
+    Canvas(modifier = modifier.size(18.dp)) {
+        val centerX = size.width / 2
+        val centerY = size.height / 2
+        rotate(rotation, pivot = Offset(centerX, centerY)) {
+            val gradientBrush = Brush.linearGradient(
+                colors = listOf(color, Color.White.copy(alpha = 0.6f), color),
+                start = Offset(0f, 0f),
+                end = Offset(size.width, size.height)
+            )
+            rotate(45f, pivot = Offset(centerX, centerY)) {
+                drawOval(
+                    brush = gradientBrush,
+                    topLeft = Offset(size.width * 0.35f, 0f),
+                    size = Size(size.width * 0.3f, size.height),
+                    style = Stroke(width = 3.5f)
+                )
+            }
+            rotate(-45f, pivot = Offset(centerX, centerY)) {
+                drawOval(
+                    brush = gradientBrush,
+                    topLeft = Offset(size.width * 0.35f, 0f),
+                    size = Size(size.width * 0.3f, size.height),
+                    style = Stroke(width = 3.5f)
+                )
+            }
+            drawCircle(color = color, radius = 2.dp.toPx(), center = Offset(centerX, centerY))
+        }
+    }
+}
+
 /**
  * Floating window content composable.
  * Displays the floating window UI with status, task list, thinking process, and voice interaction.
@@ -88,6 +148,7 @@ import kotlin.math.roundToInt
 @Composable
 fun FloatingWindowContent(
     floatingWindowController: FloatingWindowController,
+    isDynamicIslandMode: Boolean,
     onShowOverlay: (Boolean, @Composable () -> Unit) -> Unit,
     onHideOverlay: () -> Unit,
     onSendVoice: (String) -> Unit,
@@ -132,6 +193,12 @@ fun FloatingWindowContent(
     val isTaskCompleted = state is FloatingWindowState.TaskCompleted
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val prefs = remember { context.getSharedPreferences("app_settings", Context.MODE_PRIVATE) }
+    val themeColors = listOf(
+        0xFFE53935, 0xFFFB8C00, 0xFFFFA000, 0xFF43A047,
+        0xFF00ACC1, 0xFF2196F3, 0xFF8E24AA
+    )
+    val themeColor = Color(themeColors.getOrElse(prefs.getInt("theme_color_index", 5)) { 0xFF2196F3 })
     // 窗口已用 MATCH_PARENT 撑满宽度，Surface 用 fillMaxWidth 填满
     // Voice State
     var voiceResultText by remember { mutableStateOf("") }
@@ -194,23 +261,38 @@ fun FloatingWindowContent(
     }
 
     MaterialTheme {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 420.dp, max = 500.dp)
-                .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        onDrag(dragAmount.x, dragAmount.y)
-                    }
-                },
-            shape = RoundedCornerShape(24.dp),
-            color = Color.Black.copy(alpha = 0.5f),
-            contentColor = Color.White,
-            tonalElevation = 0.dp,
-            shadowElevation = 0.dp
-        ) {
-            Column(
+        if (isDynamicIslandMode) {
+            val onStopCallback = when (val s = state) {
+                is FloatingWindowState.Visible -> s.onStopCallback
+                else -> null
+            }
+            DynamicIslandCapsule(
+                status = status,
+                isTaskRunning = isTaskRunning,
+                themeColor = themeColor,
+                onStopCallback = onStopCallback,
+                floatingWindowController = floatingWindowController,
+                context = context,
+                scope = scope
+            )
+        } else {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 420.dp, max = 500.dp)
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            onDrag(dragAmount.x, dragAmount.y)
+                        }
+                    },
+                shape = RoundedCornerShape(24.dp),
+                color = Color.Black.copy(alpha = 0.5f),
+                contentColor = Color.White,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp
+            ) {
+                Column(
                 modifier = Modifier
                     .padding(16.dp)
                     .fillMaxWidth()
@@ -520,6 +602,115 @@ fun FloatingWindowContent(
                         )
                     }
                 }
+                }
+            }
+        }
+        }
+    }
+}
+
+@Composable
+private fun DynamicIslandCapsule(
+    status: String,
+    isTaskRunning: Boolean,
+    themeColor: Color,
+    onStopCallback: (() -> Unit)?,
+    floatingWindowController: FloatingWindowController,
+    context: Context,
+    scope: kotlinx.coroutines.CoroutineScope
+) {
+    val isError = status.startsWith("Error") || status.startsWith("出错") ||
+        status.startsWith("运行异常") || status.startsWith("未输入正确的文本")
+    val titleText = when {
+        isTaskRunning -> stringResource(R.string.fw_running)
+        isError -> stringResource(R.string.fw_error_title)
+        else -> stringResource(R.string.fw_ready_title)
+    }
+    val titleColor = when {
+        isTaskRunning -> themeColor
+        isError -> Color(0xFFFF5252)
+        else -> themeColor
+    }
+
+    Box(
+        modifier = Modifier
+            .padding(horizontal = 24.dp, vertical = 8.dp)
+            .wrapContentSize()
+    ) {
+        Surface(
+            modifier = Modifier.width(192.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = Color.Black,
+            shadowElevation = 0.dp
+        ) {
+            Row(
+                modifier = Modifier
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isTaskRunning) {
+                        CrossedOrbitIcon(
+                            modifier = Modifier.padding(end = 8.dp),
+                            color = themeColor
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = titleText,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
+                            color = titleColor
+                        )
+                        Text(
+                            text = status,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 9.sp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = Color.White
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(6.dp))
+                Button(
+                    onClick = {
+                        if (isTaskRunning) {
+                            onStopCallback?.invoke()
+                        } else {
+                            scope.launch {
+                                floatingWindowController.forceDismiss()
+                                val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                                if (intent != null) {
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                                    context.startActivity(intent)
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF333333),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(50),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier.height(26.dp)
+                ) {
+                    Icon(
+                        if (isTaskRunning) Icons.Default.Stop else Icons.Default.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(10.dp),
+                        tint = if (isTaskRunning) Color(0xFFFF5252) else themeColor
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text(
+                        if (isTaskRunning) stringResource(R.string.fw_stop) else stringResource(R.string.fw_return_app),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
+                        color = Color.White
+                    )
                 }
             }
         }

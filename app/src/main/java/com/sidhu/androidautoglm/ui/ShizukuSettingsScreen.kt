@@ -475,6 +475,14 @@ fun ShizukuSettingsScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = stringResource(R.string.shizuku_pairing_banner_hint),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
                             Spacer(modifier = Modifier.height(12.dp))
                             Button(
                                 onClick = {

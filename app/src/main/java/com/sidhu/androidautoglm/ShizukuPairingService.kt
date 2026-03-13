@@ -35,6 +35,8 @@ class ShizukuPairingService : Service() {
     companion object {
         private const val TAG = "ShizukuPairingService"
         const val NOTIFICATION_CHANNEL = "shizuku_pairing"
+        /** 配对发现时的横幅专用 channel：带振动，提高弹窗概率 */
+        private const val NOTIFICATION_CHANNEL_BANNER = "shizuku_pairing_banner"
         private const val NOTIFICATION_ID = 9001
         private const val REMOTE_INPUT_KEY = "pairing_code"
         private const val PORT_EXTRA = "port"
@@ -150,7 +152,8 @@ class ShizukuPairingService : Service() {
     }
 
     private fun createChannel() {
-        getSystemService(NotificationManager::class.java).createNotificationChannel(
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(
             NotificationChannel(
                 NOTIFICATION_CHANNEL,
                 getString(R.string.notification_channel_shizuku_pairing),
@@ -158,6 +161,26 @@ class ShizukuPairingService : Service() {
             ).apply {
                 setSound(null, null)
                 setShowBadge(false)
+                // 与 Shizuku 源码一致：禁用气泡，避免部分 ROM（如 MIUI）上通知操作无法正确弹出 RemoteInput
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    setAllowBubbles(false)
+                }
+            }
+        )
+        // 配对发现时的横幅专用 channel：振动 + 高优先级，提高弹窗概率
+        nm.createNotificationChannel(
+            NotificationChannel(
+                NOTIFICATION_CHANNEL_BANNER,
+                getString(R.string.notification_channel_shizuku_pairing_banner),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                setSound(null, null)
+                setShowBadge(false)
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 200, 100, 200)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    setAllowBubbles(false)
+                }
             }
         )
     }
@@ -322,7 +345,8 @@ class ShizukuPairingService : Service() {
         val remoteInput = RemoteInput.Builder(REMOTE_INPUT_KEY)
             .setLabel(getString(R.string.shizuku_pairing_code_label))
             .build()
-        val replyIntent = PendingIntent.getService(
+        // 与 Shizuku 源码一致：必须用 getForegroundService，否则部分设备（尤其 MIUI、Android 12+）点击通知「输入配对码」时 RemoteInput 输入框不弹出
+        val replyIntent = PendingIntent.getForegroundService(
             this, 1,
             Intent(this, ShizukuPairingService::class.java)
                 .setAction(ACTION_REPLY)
@@ -335,10 +359,29 @@ class ShizukuPairingService : Service() {
             replyIntent
         ).addRemoteInput(remoteInput).build()
 
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL)
+        val contentIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+        )
+        val fullScreenIntent = PendingIntent.getActivity(
+            this, 2,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+        )
+        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_BANNER)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(getString(R.string.shizuku_pairing_found_title))
             .setContentText(getString(R.string.shizuku_pairing_found_desc))
+            .setContentIntent(contentIntent)
+            .setFullScreenIntent(fullScreenIntent, true)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setVibrate(longArrayOf(0, 200, 100, 200))
             .setOngoing(true)
             .addAction(action)
             .build()

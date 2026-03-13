@@ -25,10 +25,17 @@ subprojects {
 }
 
 apply from: 'api/manifest.gradle'
-def gitCommitId = 'git rev-parse --short HEAD'.execute([], project.rootDir).text.trim()
-def gitCommitCount = Integer.parseInt('git rev-list --count HEAD'.execute([], project.rootDir).text.trim())
+def mainProps = new Properties()
+def mainPropsFile = file('../gradle.properties')
+if (mainPropsFile.exists()) {
+    mainPropsFile.withInputStream { stream -> mainProps.load(stream) }
+}
+def mainVersionCodeText = (mainProps.getProperty('app.versionCode') ?: '').trim()
+def mainVersionNameText = (mainProps.getProperty('app.versionName') ?: '').trim()
+def mainVersionCode = mainVersionCodeText ? Integer.parseInt(mainVersionCodeText) : 1
+def mainVersionName = mainVersionNameText ? mainVersionNameText : '1.0.0'
 def baseVersionName = "${api_version_major}.6.0"
 ext {
-    versionCode = gitCommitCount
-    versionName = "${baseVersionName}.r${gitCommitCount}.${gitCommitId}"
+    versionCode = mainVersionCode
+    versionName = mainVersionName
 }

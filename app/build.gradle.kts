@@ -16,6 +16,8 @@ if (localPropertiesFile.exists()) {
 }
 val defaultApiKey = localProperties.getProperty("ZHIPU_API_KEY") ?: ""
 val minimaxApiKey = localProperties.getProperty("MINIMAX_API_KEY") ?: ""
+val appVersionCode = (project.findProperty("app.versionCode") as String?)?.toIntOrNull() ?: 1
+val appVersionName = (project.findProperty("app.versionName") as String?) ?: "1.0.0"
 
 // Tasks
 tasks.register("downloadModel") {
@@ -93,8 +95,8 @@ android {
         applicationId = "com.sidhu.androidautoglm"
         minSdk = 30
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.2.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

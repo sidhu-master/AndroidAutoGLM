@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.provider.Settings
@@ -110,12 +111,8 @@ class AutoGLMShizukuService : Service(), IGLMService {
         // 创建通知渠道
         createNotificationChannel()
 
-        // 启动前台服务（Android 14+ 需显式传入服务类型）
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, createNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIFICATION_ID, createNotification())
-        }
+        // 启动前台服务（Android 14+ 需显式传入服务类型；初始用 dataSync，开启唤醒词后更新为 microphone 以提升后台唤醒成功率）
+        updateForegroundServiceType(wakeWordEnabled = false)
 
         // 初始化
         initialize()
@@ -162,6 +159,7 @@ class AutoGLMShizukuService : Service(), IGLMService {
         if (prefs.getBoolean("wake_up_enabled", false)) {
             SherpaModelManager.runWhenReady(serviceScope, this) {
                 WakeWordDetector.startWakeWordMode(this@AutoGLMShizukuService)
+                updateForegroundServiceType(wakeWordEnabled = true)
             }
         }
 
@@ -173,6 +171,10 @@ class AutoGLMShizukuService : Service(), IGLMService {
     // 保活 1×1 悬浮窗
     // =========================================================
 
+    /**
+     * 1×1 保活悬浮窗。FLAG_NOT_TOUCH_MODAL 等标志提升后台存活率，
+     * 让系统认为应用处于前台活跃状态，从而防止后台降频或杀进程，提升语音唤醒成功率。
+     */
     private fun setupKeepAliveWindow() {
         try {
             if (keepAliveView != null) return
@@ -186,10 +188,13 @@ class AutoGLMShizukuService : Service(), IGLMService {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                 PixelFormat.TRANSLUCENT
             )
             params.gravity = Gravity.START or Gravity.TOP
+            params.x = 0
+            params.y = 0
             params.alpha = 0.01f
             val view = View(this)
             wm.addView(view, params)
@@ -250,6 +255,7 @@ class AutoGLMShizukuService : Service(), IGLMService {
     fun startWakeWordListening() {
         val prefs = getSharedPreferences("app_settings", Context.MODE_PRIVATE)
         prefs.edit().putBoolean("wake_up_enabled", true).apply()
+        updateForegroundServiceType(wakeWordEnabled = true)
         serviceScope.launch(Dispatchers.IO) {
             WakeWordDetector.startWakeWordMode(this@AutoGLMShizukuService)
         }
@@ -259,6 +265,7 @@ class AutoGLMShizukuService : Service(), IGLMService {
         val prefs = getSharedPreferences("app_settings", Context.MODE_PRIVATE)
         prefs.edit().putBoolean("wake_up_enabled", false).apply()
         WakeWordDetector.stopListening()
+        updateForegroundServiceType(wakeWordEnabled = false)
     }
 
     /**
@@ -369,6 +376,26 @@ class AutoGLMShizukuService : Service(), IGLMService {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()
+    }
+
+    /**
+     * 更新前台服务类型：开启唤醒词且已授权麦克风时使用 MICROPHONE 类型，
+     * 让系统明确我们在后台使用麦克风，提升后台语音唤醒成功率。
+     */
+    private fun updateForegroundServiceType(wakeWordEnabled: Boolean) {
+        val notification = createNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val useMicrophone = wakeWordEnabled &&
+                checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+            val serviceType = if (useMicrophone) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            }
+            startForeground(NOTIFICATION_ID, notification, serviceType)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     // ========== IGLMService 实现 ==========

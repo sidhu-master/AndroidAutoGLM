@@ -444,6 +444,7 @@ class FloatingWindowController(private val context: Context) : LifecycleOwner, V
                     ) {
                         FloatingWindowContent(
                             floatingWindowController = this@FloatingWindowController,
+                            isDynamicIslandMode = floatingWindowManager.isDynamicIslandMode(),
                             onShowOverlay = { focusable, content ->
                                 showOverlay(focusable, content)
                             },

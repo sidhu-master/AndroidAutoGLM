@@ -52,37 +52,63 @@ class FloatingWindowManager(private val context: Context) {
 
     companion object {
         private const val TAG = "FloatingWindowManager"
+        private const val PREF_FW_MODE = "floating_window_mode"
+        const val MODE_DYNAMIC_ISLAND = "dynamic_island"
+        const val MODE_NORMAL = "normal"
     }
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
     /**
+     * 是否使用灵动岛模式（顶部胶囊）
+     */
+    fun isDynamicIslandMode(): Boolean {
+        val prefs = context.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
+        return prefs.getString(PREF_FW_MODE, MODE_DYNAMIC_ISLAND) == MODE_DYNAMIC_ISLAND
+    }
+
+    /**
      * Creates and initializes WindowManager.LayoutParams for the floating window.
      *
-     * Default configuration:
-     * - Size: WRAP_CONTENT x WRAP_CONTENT
-     * - Type: TYPE_APPLICATION_OVERLAY
-     * - Flags: NOT_FOCUSABLE, WATCH_OUTSIDE_TOUCH, LAYOUT_NO_LIMITS
-     * - Gravity: BOTTOM | START
-     * - Position: (0, 20) from bottom-left corner
+     * Dynamic Island mode: TOP | CENTER_HORIZONTAL, WRAP_CONTENT, y=6
+     * Normal mode: BOTTOM | START, full width
      *
      * @return configured LayoutParams
      */
     fun createWindowParams(): WindowManager.LayoutParams {
         val screenWidthPx = DisplayUtils.getScreenWidth(context)
-        Log.d(TAG, "createWindowParams: width=$screenWidthPx px (full screen)")
-        return WindowManager.LayoutParams(
-            screenWidthPx,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.BOTTOM or Gravity.START
-            x = 0
-            y = 0  // 贴底，无底部 margin
+        val isDynamicIsland = isDynamicIslandMode()
+
+        return if (isDynamicIsland) {
+            Log.d(TAG, "createWindowParams: Dynamic Island mode (WRAP_CONTENT, top center)")
+            WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                x = 0
+                y = 6
+            }
+        } else {
+            Log.d(TAG, "createWindowParams: Normal mode (full width, bottom)")
+            WindowManager.LayoutParams(
+                screenWidthPx,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.START
+                x = 0
+                y = 0
+            }
         }
     }
 
@@ -185,8 +211,9 @@ class FloatingWindowManager(private val context: Context) {
     /**
      * Restores a suspended window to its normal visible state.
      *
-     * Counterpart to suspendWindow(). Restores the window to MATCH_PARENT x WRAP_CONTENT
-     * (与 createWindowParams 一致) and makes it interactive again.
+     * Counterpart to suspendWindow(). Restores size based on mode:
+     * - Dynamic Island: WRAP_CONTENT x WRAP_CONTENT
+     * - Normal: screenWidth x WRAP_CONTENT
      *
      * @param view The view to restore
      * @param params The layout parameters to modify
@@ -195,11 +222,17 @@ class FloatingWindowManager(private val context: Context) {
     fun restoreWindow(view: View?, params: WindowManager.LayoutParams): Boolean {
         if (view == null) return false
         val t0 = System.currentTimeMillis()
+        val isDynamicIsland = isDynamicIslandMode()
         return try {
             view.visibility = View.VISIBLE
             params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-            params.width = DisplayUtils.getScreenWidth(context)
-            params.height = WindowManager.LayoutParams.WRAP_CONTENT
+            if (isDynamicIsland) {
+                params.width = WindowManager.LayoutParams.WRAP_CONTENT
+                params.height = WindowManager.LayoutParams.WRAP_CONTENT
+            } else {
+                params.width = DisplayUtils.getScreenWidth(context)
+                params.height = WindowManager.LayoutParams.WRAP_CONTENT
+            }
             windowManager.updateViewLayout(view, params)
             Log.d(TAG, "Window restored at t=$t0, updateLayout took ${System.currentTimeMillis() - t0}ms")
             true

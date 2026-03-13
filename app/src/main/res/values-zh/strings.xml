@@ -58,12 +58,15 @@
     <string name="shizuku_pair_failed">配对失败</string>
     <string name="shizuku_cannot_connect">无法连接至无线调试服务。</string>
     <string name="notification_channel_shizuku_pairing">Shizuku 配对</string>
+    <string name="notification_channel_shizuku_pairing_banner">Shizuku 配对（横幅）</string>
+    <string name="shizuku_pairing_banner_hint">若配对通知未以横幅弹出，请到 设置→应用→特殊应用权限→全屏 intent 中开启本应用。</string>
     <string name="shizuku_pairing_stop">停止</string>
     <string name="shizuku_pairing_found_title">已发现配对服务</string>
-    <string name="shizuku_pairing_found_desc">点击输入六位配对码</string>
+    <string name="shizuku_pairing_found_desc">悬浮窗已弹出，输入六位配对码</string>
     <string name="shizuku_pairing_input_action">输入配对码</string>
     <string name="shizuku_pairing_working">正在配对…</string>
-    <string name="shizuku_pairing_started_toast">已开始配对。请前往「无线调试」→「使用配对码配对设备」，然后点击通知输入配对码。</string>
+    <string name="shizuku_pairing_started_toast">已开始配对。请前往「无线调试」→「使用配对码配对设备」，然后在悬浮窗输入配对码。</string>
+    <string name="shizuku_pairing_overlay_permission_required">需要悬浮窗权限才能在设置页面显示配对码输入框，请先授予。</string>
     <string name="shizuku_request_failed_toast">请求 Shizuku 授权失败</string>
     <string name="shizuku_nearby_permission_required">需要授予“附近设备”权限才能发现无线调试服务</string>
     <string name="tap_to_enable">点击开启</string>
@@ -132,6 +135,8 @@
     <string name="fw_task_list">任务清单</string>
     <string name="fw_thinking">思考过程</string>
     <string name="fw_voice_input">长按说话</string>
+    <string name="fw_show_details_title">悬浮窗</string>
+    <string name="fw_show_details_desc">显示详情思考过程</string>
 
     <!-- ChatViewModel Status & Errors -->
     <string name="status_stopped">已停止</string>

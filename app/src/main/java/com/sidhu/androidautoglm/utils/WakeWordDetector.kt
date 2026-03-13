@@ -22,7 +22,7 @@ import kotlin.math.log10
 import kotlin.math.sqrt
 
 /**
- * 唤醒词检测器——从 xiaoan 项目移植
+ * 唤醒词检测器
  *
  * 功能：
  *  - 唤醒词模式（startWakeWordMode）：后台持续录音，检测到唤醒词后触发回调
@@ -96,6 +96,14 @@ object WakeWordDetector {
     // 流重置阈值（防止 Sherpa 流内存泄漏）
     private const val SOFT_RESET_THRESHOLD_FRAMES = 16000 * 5   // 5s 静音时软重置
     private const val HARD_RESET_THRESHOLD_FRAMES = 16000 * 15  // 15s 强制重置
+
+    /** 唤醒后冷却期：防止回声/幻听导致连续误触发（部分机型反馈会一直唤醒） */
+    private const val WAKE_UP_COOLDOWN_MS = 4000L
+    /** 启动后宽限期：刚进入唤醒词模式时忽略前 N 毫秒的识别结果，避免上一段音频残留 */
+    private const val STARTUP_GRACE_MS = 2000L
+
+    @Volatile
+    private var lastWakeUpTimeMs: Long = 0
 
     private var audioManager: AudioManager? = null
     private var savedVolume: Int = -1
@@ -203,7 +211,11 @@ object WakeWordDetector {
         isCommandMode = false
 
         acquireWakeLock()
-        Log.i(TAG, "Starting Wake Word Mode with wake word: \"${_wakeWord.value}\"")
+        val ww = _wakeWord.value
+        if (ww.isBlank()) {
+            Log.w(TAG, "唤醒词为空！text.contains(\"\") 会匹配任何文本导致误触发，请在设置中配置唤醒词")
+        }
+        Log.i(TAG, "Starting Wake Word Mode with wake word: \"$ww\"")
 
         try {
             val minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
@@ -238,6 +250,7 @@ object WakeWordDetector {
             var stream = recognizer.createStream()
             var framesSinceLastDecode = 0
             var framesInCurrentStream = 0
+            val modeStartTimeMs = System.currentTimeMillis()
 
             try {
                 while (isRunning.get() && isWakeWordMode) {
@@ -260,17 +273,43 @@ object WakeWordDetector {
                         framesInCurrentStream += read
 
                         if (framesSinceLastDecode >= FRAMES_PER_DECODE_WAKE) {
+                            val nowMs = System.currentTimeMillis()
+                            // 冷却期：刚唤醒后一段时间内丢弃音频，防止连续误触发
+                            if (nowMs - lastWakeUpTimeMs < WAKE_UP_COOLDOWN_MS) {
+                                stream.release()
+                                stream = recognizer.createStream()
+                                framesSinceLastDecode = 0
+                                framesInCurrentStream = 0
+                                delay(20)
+                                continue
+                            }
+                            // 启动宽限期：刚进入模式时丢弃音频并重置流，避免上一段音频残留/回声导致误触发
+                            if (nowMs - modeStartTimeMs < STARTUP_GRACE_MS) {
+                                stream.release()
+                                stream = recognizer.createStream()
+                                framesSinceLastDecode = 0
+                                framesInCurrentStream = 0
+                                delay(20)
+                                continue
+                            }
+
                             recognizer.decode(stream)
                             val text = recognizer.getResult(stream).text.trim()
+                            val wakeWord = _wakeWord.value
 
-                            if (text.isNotEmpty()) {
-                                if (text.contains(_wakeWord.value, ignoreCase = true)) {
-                                    Log.i(TAG, "✅ 唤醒词 \"${_wakeWord.value}\" 检测到！")
-                                    stream.release()
-                                    handleWakeUpLogic(context)
-                                    stopListening()
-                                    break
-                                }
+                            // 关键词过滤：唤醒词为空时 text.contains("") 恒为 true，会误触发一切
+                            val canTrigger = wakeWord.isNotBlank() &&
+                                db >= SILENCE_THRESHOLD_DB &&  // 静音过滤：SenseVoice 在静音/噪声下会幻听
+                                text.isNotEmpty() &&
+                                text.contains(wakeWord, ignoreCase = true)
+
+                            if (canTrigger) {
+                                Log.i(TAG, "✅ 唤醒词 \"$wakeWord\" 检测到！(text=\"$text\", db=$db)")
+                                lastWakeUpTimeMs = nowMs
+                                stream.release()
+                                handleWakeUpLogic(context)
+                                stopListening()
+                                break
                             }
 
                             // 流智能重置（防止内存泄漏和识别漂移）

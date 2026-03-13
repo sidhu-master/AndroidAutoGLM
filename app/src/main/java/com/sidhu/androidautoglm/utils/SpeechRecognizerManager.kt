@@ -57,7 +57,7 @@ class SpeechRecognizerManager(private val context: Context) {
     private var onResult: ((String) -> Unit)? = null
     private var onError: ((String) -> Unit)? = null
 
-    // VAD 参数（与 xiaoan 对齐）
+    // VAD 参数
     private val SILENCE_THRESHOLD_DB = -40.0f    // 低于该分贝视为静音
     private val SILENCE_DURATION_MS = 1500L      // 持续静音超过 1.5s 自动停止
     private val NO_SPEECH_TIMEOUT_MS = 8000L     // 8s 未检测到语音则超时

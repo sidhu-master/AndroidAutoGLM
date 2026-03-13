@@ -6,6 +6,9 @@ Welcome to **AutoGLM Android Assistant**! This is an intelligent agent applicati
 
 ### Step 1: Enable Wireless Debugging and Pair Shizuku
 This version no longer relies on Accessibility permission. It uses Shizuku + wireless debugging for automation and screenshots.
+
+**Before pairing**: Go to **Settings** → **Apps** → **AutoGLM** → **Notifications**, and enable **Banner** (or "Show as banner") so the pairing notification can pop up when the pairing service is found.
+
 1. Open **Settings** → **Developer options** and enable **Wireless debugging**.
 2. Return to the app → **Settings** → **Shizuku**, tap **Pair device**.
 3. Open **Wireless debugging**, tap **Pair device with pairing code**, and enter the code shown in the app dialog.

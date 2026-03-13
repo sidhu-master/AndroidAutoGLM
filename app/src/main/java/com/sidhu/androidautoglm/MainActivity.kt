@@ -205,6 +205,9 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         composable("settings") {
+                            var floatingWindowMode by remember {
+                                mutableStateOf(prefs.getString("floating_window_mode", com.sidhu.androidautoglm.FloatingWindowManager.MODE_DYNAMIC_ISLAND) ?: com.sidhu.androidautoglm.FloatingWindowManager.MODE_DYNAMIC_ISLAND)
+                            }
                             // Check battery status when entering settings or resuming
                             DisposableEffect(Unit) {
                                 val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -330,6 +333,11 @@ class MainActivity : ComponentActivity() {
                                     if (isWakeWordEnabled) {
                                         shizukuService?.startWakeWordListening()
                                     }
+                                },
+                                floatingWindowMode = floatingWindowMode,
+                                onFloatingWindowModeChange = { mode ->
+                                    prefs.edit().putString("floating_window_mode", mode).apply()
+                                    floatingWindowMode = mode
                                 }
                             )
                         }

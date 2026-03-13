@@ -58,12 +58,15 @@
     <string name="shizuku_pair_failed">Pairing failed</string>
     <string name="shizuku_cannot_connect">Cannot connect to wireless debugging service.</string>
     <string name="notification_channel_shizuku_pairing">Shizuku pairing</string>
+    <string name="notification_channel_shizuku_pairing_banner">Shizuku pairing (banner)</string>
+    <string name="shizuku_pairing_banner_hint">If the pairing notification does not pop up as a banner, go to Settings → Apps → Special app access → Display over other apps / Full screen intents and enable this app.</string>
     <string name="shizuku_pairing_stop">Stop</string>
     <string name="shizuku_pairing_found_title">Pairing service found</string>
-    <string name="shizuku_pairing_found_desc">Tap to enter the 6-digit pairing code</string>
+    <string name="shizuku_pairing_found_desc">Floating window is open. Enter the 6-digit pairing code.</string>
     <string name="shizuku_pairing_input_action">Enter pairing code</string>
     <string name="shizuku_pairing_working">Pairing in progress…</string>
-    <string name="shizuku_pairing_started_toast">Pairing started. Go to Wireless debugging → Pair device with pairing code, then tap the notification to enter the code.</string>
+    <string name="shizuku_pairing_started_toast">Pairing started. Go to Wireless debugging → Pair device with pairing code, then enter it in the floating window.</string>
+    <string name="shizuku_pairing_overlay_permission_required">Overlay permission required to show pairing input on Settings screen. Please grant it first.</string>
     <string name="shizuku_request_failed_toast">Failed to request Shizuku permission</string>
     <string name="shizuku_nearby_permission_required">需要授予“附近设备”权限才能发现无线调试服务</string>
     <string name="tap_to_enable">Tap to enable</string>
@@ -132,6 +135,8 @@
     <string name="fw_task_list">Task List</string>
     <string name="fw_thinking">Thinking</string>
     <string name="fw_voice_input">Hold to speak</string>
+    <string name="fw_show_details_title">Floating Window</string>
+    <string name="fw_show_details_desc">Show details and thinking process</string>
 
     <!-- ChatViewModel Status & Errors -->
     <string name="status_stopped">Stopped</string>

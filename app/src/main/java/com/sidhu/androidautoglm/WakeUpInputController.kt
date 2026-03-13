@@ -364,9 +364,10 @@ class WakeUpInputController(private val context: Context) : LifecycleOwner, View
     
     private fun restartWakeWordDetection() {
         WakeWordDetector.stopListening()
+        // 延长至 2s，避免音效/回声未消散时立即监听导致连续误唤醒（部分机型反馈）
         mainHandler.postDelayed({
             WakeWordDetector.startWakeWordMode(context)
-        }, 500)
+        }, 2000)
     }
     
     fun cleanup() {
