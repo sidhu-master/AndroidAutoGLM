@@ -65,8 +65,46 @@ This app uses Zhipu AI's vision model. You need an API Key:
 ---
 
 ## 3. FAQ
-*   **No action performed?** Check if Accessibility Service was killed by the system. Re-enable it.
+*   **No action performed?** Check if Shizuku was killed by the system. Re-enable it in Settings.
 *   **API Key Invalid?** Check for extra spaces or account balance.
+
+---
+
+## 📜 License & Permissions
+
+### Copyright & Usage
+
+This project (AutoGLM Android Assistant) is developed by **Xi De Hu AI Programming** and all rights are reserved.
+
+- **Personal / Educational / Non-commercial use**: You may freely use, modify, and share the source code and builds.
+- **Commercial use**: Any commercial use (including but not limited to: commercial software, paid services, enterprise use, or commercial derivative works) **requires prior written authorization from the author**. Unauthorized commercial use is prohibited.
+
+**Authorization contact**: Reach out via TikTok **"Xi De Hu AI Programming"** (喜德胡AI编程) for commercial licensing inquiries.
+
+### Third-Party Licenses
+
+This project uses the following open-source components under their respective licenses:
+
+| Component | License |
+|-----------|---------|
+| [Shizuku](https://github.com/RikkaApps/Shizuku) | Apache License 2.0 |
+| [llama.cpp](https://github.com/ggerganov/llama.cpp) | MIT License |
+| Other dependencies | See each component's notice |
+
+### App Permissions
+
+| Permission | Purpose |
+|------------|---------|
+| **Network** (INTERNET) | Call Zhipu AI and other cloud APIs |
+| **Overlay** (SYSTEM_ALERT_WINDOW) | Show AI status floating window |
+| **Microphone** (RECORD_AUDIO) | Voice input and wake word |
+| **Foreground Service** | Keep AI service running in background |
+| **Nearby devices** (NEARBY_WIFI_DEVICES) | Discover wireless debugging for Shizuku pairing |
+| **Notifications** | Pairing and status notifications |
+| **Ignore battery optimization** | Reduce background kill by system |
+| **Camera** (CAMERA) | Optional, for extended features |
+
+**Shizuku authorization**: Required for touch simulation and screenshots. No Root needed.
 
 ---
 
